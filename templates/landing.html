@@ -21,7 +21,7 @@
         </p>
         <div class="hero-actions">
             <a href="{{ url_for('register') }}" class="btn-primary">Create free account</a>
-            <a href="{{ url_for('login') }}" class="btn-primary">See how it works</a>
+            <a href="#demo" class="btn-primary" data-open-modal="demo-modal">See how it works</a>
         </div>
 
         <div class="hero-preview" aria-hidden="true">
@@ -100,5 +100,23 @@
         <a href="{{ url_for('register') }}" class="btn-primary">Create free account</a>
     </div>
 </section>
+
+<div id="demo-modal" class="modal" hidden aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="demo-modal-title">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-window" role="document">
+        <button type="button" class="modal-close" data-close-modal aria-label="Close video">&times;</button>
+        <h2 id="demo-modal-title" class="modal-title">See Spendly in action</h2>
+        <div class="modal-video">
+            <iframe
+                id="demo-modal-video"
+                src=""
+                data-src="https://www.youtube.com/embed/dQw4w9WgXcQ"
+                title="Spendly demo video"
+                frameborder="0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowfullscreen></iframe>
+        </div>
+    </div>
+</div>
 
 {% endblock %}
