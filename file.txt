@@ -41,9 +41,48 @@ footer link href from "#" to "/privacy".
 
 git commit -m "landing: add privacy policy page and route"
 
-I've attached a screenshot of the updated Spendly hero section design.
+A clean, modern SaaS landing page hero section for a personal finance app called "Spendly," 
+on a white background with generous whitespace, centered layout, thin black border frame.
 
-Modify only the hero section in templates/landing.html and static/css/landing.css
+TOP BADGE: Small pill-shaped badge with mint-green background, a small green dot bullet, 
+dark green text reading "Free to use · No credit card needed."
+
+DECORATIVE ICON: A tiny black crosshair/plus symbol centered just below the badge.
+
+HEADLINE: Large, bold, rounded geometric sans-serif font, centered, two lines:
+Line 1 in black: "Track every rupee."
+Line 2 in emerald green: "Know where it goes."
+
+SUBHEADING: Centered gray paragraph text below headline, two lines:
+"Spendly helps you log expenses, spot patterns, and stay on budget — 
+without the spreadsheet headache."
+
+CTA BUTTONS: Two black rounded-rectangle buttons side by side, white bold text:
+"Create free account" and "See how it works."
+
+DASHBOARD PREVIEW: A large light-gray rounded "browser window" card below the buttons, 
+with three small traffic-light dots (red, yellow, green) in the top-left corner like a 
+Mac app window.
+
+Inside the window, three white rounded stat cards in a row:
+1. Label "This month" (gray) — big bold number "₹18,240" — small red text "+12% vs last"
+2. Label "Budget left" (gray) — big bold number "₹6,760" — small green text "43% remaining"
+3. Label "Transactions" (gray) — big bold number "34" — small gray text "this month"
+
+Below the stat cards, a white rounded panel with three horizontal progress bars 
+on light-gray tracks:
+- "Food" — orange bar filled to ~80%
+- "Travel" — blue bar filled to ~60%
+- "Bills" — purple bar filled to ~35%
+
+STYLE: Minimalist fintech/SaaS aesthetic, rounded corners throughout, soft subtle 
+drop shadows, plenty of negative space, Indian Rupee (₹) currency formatting, 
+high contrast black/white with green as primary accent color and orange/blue/purple 
+as secondary data-visualization colors.
+
+I've attached a attach a prompt of the updated Spendly hero section design.
+
+Modify only the hero section in @templates/landing.html and static/css/landing.css
 to match this image exactly. Do not touch any other part of the page.
 
 Changes to implement:
