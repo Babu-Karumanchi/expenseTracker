@@ -24,7 +24,8 @@ def test_register_happy_path_creates_user_and_redirects(client):
         follow_redirects=False,
     )
     assert resp.status_code == 302
-    assert "/login" in resp.headers["Location"]
+    # New accounts are signed in automatically and land on the home page.
+    assert resp.headers["Location"].endswith("/")
 
     # Verify the user is in the DB with a hashed (not plaintext) password.
     conn = _db.get_db()
@@ -56,6 +57,10 @@ def test_register_duplicate_email_shows_error_not_500(client):
         follow_redirects=False,
     )
     assert first.status_code == 302
+
+    # Registration logs the new user in, so log out before the second attempt —
+    # otherwise the auth guard would redirect to the home page.
+    client.get("/logout", follow_redirects=False)
 
     # Second registration with the same email must NOT 500.
     second = client.post(
