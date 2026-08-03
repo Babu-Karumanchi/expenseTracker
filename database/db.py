@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-from werkzeug.security import generate_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 # database/db.py → spendly/ → repo root
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -87,3 +87,44 @@ def seed_db():
         conn.commit()
     finally:
         conn.close()
+
+
+def create_user(name, email, password):
+    """Insert a new user, hashing the password. Returns the new user id.
+
+    Lets sqlite3.IntegrityError (duplicate email) propagate to the caller
+    so the route can translate it into a user-facing message.
+    """
+    conn = get_db()
+    try:
+        password_hash = generate_password_hash(password)
+        cur = conn.execute(
+            "INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)",
+            (name, email, password_hash),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def get_user_by_email(email):
+    """Fetch a user row by email. Returns None if not found."""
+    conn = get_db()
+    try:
+        return conn.execute(
+            "SELECT id, name, email, password_hash FROM users WHERE email = ?",
+            (email,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def verify_password(user, password):
+    """Check a plaintext password against the user's stored hash.
+
+    Returns True on match, False otherwise. Safe to call with user=None.
+    """
+    if user is None:
+        return False
+    return check_password_hash(user["password_hash"], password)
