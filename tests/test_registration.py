@@ -24,8 +24,8 @@ def test_register_happy_path_creates_user_and_redirects(client):
         follow_redirects=False,
     )
     assert resp.status_code == 302
-    # New accounts are signed in automatically and land on the home page.
-    assert resp.headers["Location"].endswith("/")
+    # New accounts are signed in automatically and land on the profile page.
+    assert resp.headers["Location"].endswith("/profile")
 
     # Verify the user is in the DB with a hashed (not plaintext) password.
     conn = _db.get_db()
