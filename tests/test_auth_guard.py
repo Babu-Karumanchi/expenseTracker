@@ -1,7 +1,7 @@
 """Tests for the signed-in guard on /login and /register.
 
 A logged-in user must never see the login or registration pages —
-they should be redirected to the home page regardless of HTTP method.
+they should be redirected to their profile page regardless of HTTP method.
 """
 
 
@@ -17,14 +17,14 @@ def test_signed_in_user_get_login_is_redirected_home(client):
     _login(client)
     resp = client.get("/login", follow_redirects=False)
     assert resp.status_code == 302
-    assert resp.headers["Location"].endswith("/")
+    assert resp.headers["Location"].endswith("/profile")
 
 
 def test_signed_in_user_get_register_is_redirected_home(client):
     _login(client)
     resp = client.get("/register", follow_redirects=False)
     assert resp.status_code == 302
-    assert resp.headers["Location"].endswith("/")
+    assert resp.headers["Location"].endswith("/profile")
 
 
 def test_signed_in_user_post_login_is_redirected_home(client):
@@ -37,7 +37,7 @@ def test_signed_in_user_post_login_is_redirected_home(client):
         follow_redirects=False,
     )
     assert resp.status_code == 302
-    assert resp.headers["Location"].endswith("/")
+    assert resp.headers["Location"].endswith("/profile")
     # The original session is intact (same user, same name).
     with client.session_transaction() as sess:
         assert sess["user_name"] == "Demo User"
@@ -58,7 +58,7 @@ def test_signed_in_user_post_register_is_redirected_home(client):
         follow_redirects=False,
     )
     assert resp.status_code == 302
-    assert resp.headers["Location"].endswith("/")
+    assert resp.headers["Location"].endswith("/profile")
 
     import database.db as _db
     conn = _db.get_db()

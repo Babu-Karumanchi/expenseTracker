@@ -12,7 +12,7 @@ def test_login_get_renders_form(client):
     assert b'action="/login"' in resp.data
 
 
-def test_login_happy_path_redirects_to_home(client):
+def test_login_happy_path_redirects_to_profile(client):
     # The seeded demo user is reset before every test via the autouse fixture.
     resp = client.post(
         "/login",
@@ -20,8 +20,8 @@ def test_login_happy_path_redirects_to_home(client):
         follow_redirects=False,
     )
     assert resp.status_code == 302
-    # No profile page yet, so login lands on the home page.
-    assert resp.headers["Location"].endswith("/")
+    # Successful login lands the user on their profile page.
+    assert resp.headers["Location"].endswith("/profile")
 
     # session is set on the test client.
     with client.session_transaction() as sess:
@@ -88,17 +88,17 @@ def test_login_after_registration_round_trip(client):
         follow_redirects=False,
     )
     assert register_resp.status_code == 302
-    # Registration also lands on the home page now (not /login).
-    assert register_resp.headers["Location"].endswith("/")
+    # Registration also lands the new user on the profile page.
+    assert register_resp.headers["Location"].endswith("/profile")
 
-    # Logging in with the freshly-created credentials also lands on /.
+    # Logging in with the freshly-created credentials lands on /profile too.
     follow_resp = client.post(
         "/login",
         data={"email": "roundtrip@example.com", "password": "secret123"},
         follow_redirects=False,
     )
     assert follow_resp.status_code == 302
-    assert follow_resp.headers["Location"].endswith("/")
+    assert follow_resp.headers["Location"].endswith("/profile")
 
     with client.session_transaction() as sess:
         assert sess["user_name"] == "Round Trip"

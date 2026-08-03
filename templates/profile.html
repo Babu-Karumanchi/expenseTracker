@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{# TODO (Step 5): replace the hardcoded user / stats / transactions /
+   categories variables coming from app.py with real queries against
+   the `users` and `expenses` tables, and wire the Edit profile button. #}
+
+{% block title %}Your profile — Spendly{% endblock %}
+
+{% block content %}
+
+<section class="profile-section">
+
+    <header class="profile-header">
+        <h1 class="profile-title">Your profile</h1>
+        <p class="profile-subtitle">Account overview and recent activity</p>
+    </header>
+
+    {# 1. User info card — avatar + name + email + member-since #}
+    <div class="profile-card profile-info-card">
+        <div class="profile-info-left">
+            <div class="profile-avatar" aria-hidden="true">{{ user.initial }}</div>
+            <div class="profile-info-meta">
+                <h2 class="profile-name">{{ user.name }}</h2>
+                <p class="profile-email">{{ user.email }}</p>
+                <span class="profile-member-since">Member since {{ user.member_since }}</span>
+            </div>
+        </div>
+        <button type="button" class="btn-ghost" disabled title="Edit profile — coming in Step 5">Edit profile</button>
+    </div>
+
+    {# 2. Summary stats row — total spent / transactions / top category #}
+    <div class="profile-stats">
+        {% for stat in stats %}
+        <div class="profile-stat">
+            <span class="profile-stat-label">{{ stat.label }}</span>
+            <span class="profile-stat-value">{{ stat.value }}</span>
+            <span class="profile-stat-meta">{{ stat.meta }}</span>
+        </div>
+        {% endfor %}
+    </div>
+
+    {# 3 + 4. Side-by-side on desktop: Recent transactions (left) and
+       Spending by category (right). The grid collapses to a single
+       column at the existing narrow-screen breakpoint (see style.css). #}
+    <div class="profile-tables-row">
+
+        {# Recent Transactions — tabular format #}
+        <div class="profile-card">
+            <h3 class="profile-card-title">Recent transactions</h3>
+            <div class="profile-table-wrap">
+                <table class="profile-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Description</th>
+                            <th>Category</th>
+                            <th class="profile-table-num">Amount</th>
+                            <th class="profile-table-num">Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for txn in transactions %}
+                        <tr>
+                            <td>{{ txn.date }}</td>
+                            <td>{{ txn.description }}</td>
+                            <td>
+                                <span class="category-badge category-badge--{{ txn.category_class }}">
+                                    {{ txn.category }}
+                                </span>
+                            </td>
+                            <td class="profile-table-num">{{ txn.amount }}</td>
+                            <td class="profile-table-num profile-table-balance">{{ txn.balance }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        {# Spending by Category — tabular format with percentage bar #}
+        <div class="profile-card">
+            <h3 class="profile-card-title">Spending by category</h3>
+            <div class="profile-table-wrap">
+                <table class="profile-table profile-table--categories">
+                    <thead>
+                        <tr>
+                            <th>Category</th>
+                            <th class="profile-table-num">Total spent</th>
+                            <th class="profile-table-num">Transactions</th>
+                            <th class="profile-table-num profile-table-num--wide">% of total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for cat in categories %}
+                        <tr>
+                            <td>
+                                <span class="category-badge category-badge--{{ cat.bar_class }}">
+                                    {{ cat.name }}
+                                </span>
+                            </td>
+                            <td class="profile-table-num">{{ cat.total }}</td>
+                            <td class="profile-table-num">{{ cat.count }}</td>
+                            <td class="profile-table-num profile-table-num--wide">
+                                <div class="profile-table-pct">
+                                    <span class="profile-table-pct-value">{{ "%.1f"|format(cat.percentage) }}%</span>
+                                    <div class="profile-table-pct-track" aria-hidden="true">
+                                        <div class="profile-table-pct-fill profile-table-pct-fill--{{ cat.bar_class }}" style="width: {{ cat.percentage }}%"></div>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+
+</section>
+
+{% endblock %}
