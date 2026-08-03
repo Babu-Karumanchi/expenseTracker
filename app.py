@@ -21,6 +21,18 @@ app.secret_key = os.environ.get("SPENDLY_SECRET_KEY") or "dev-only-not-for-produ
 # Routes                                                              #
 # ------------------------------------------------------------------ #
 
+def _redirect_if_signed_in():
+    """If a user is already logged in, send them to the home page.
+
+    Returns a redirect Response when signed in, otherwise None.
+    Both GET and POST use this so the guard fires for every entry
+    point into the login/register pages.
+    """
+    if session.get("user_id"):
+        return redirect(url_for("landing"))
+    return None
+
+
 @app.route("/")
 def landing():
     return render_template("landing.html")
@@ -28,6 +40,10 @@ def landing():
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
+    signed_in = _redirect_if_signed_in()
+    if signed_in is not None:
+        return signed_in
+
     if request.method == "GET":
         return render_template("register.html")
 
@@ -76,11 +92,15 @@ def register():
     session.clear()
     session["user_id"] = user_id
     session["user_name"] = name
-    return redirect(url_for("login"))
+    return redirect(url_for("landing"))
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    signed_in = _redirect_if_signed_in()
+    if signed_in is not None:
+        return signed_in
+
     if request.method == "GET":
         return render_template("login.html")
 
@@ -106,7 +126,7 @@ def login():
     session.clear()
     session["user_id"] = user["id"]
     session["user_name"] = user["name"]
-    return redirect(url_for("profile"))
+    return redirect(url_for("landing"))
 
 
 @app.route("/terms")
@@ -123,9 +143,13 @@ def privacy():
 # Placeholder routes — students will implement these                  #
 # ------------------------------------------------------------------ #
 
-@app.route("/logout")
+@app.route("/logout", methods=["GET", "POST"])
 def logout():
-    return "Logout — coming in Step 3"
+    # NOTE: GET-based logout is a deliberate trade-off — this is a
+    # single-user personal tracker and the navbar uses a link, not a form.
+    # Do not copy this pattern into a multi-user context without CSRF.
+    session.clear()
+    return redirect(url_for("landing"))
 
 
 @app.route("/profile")
