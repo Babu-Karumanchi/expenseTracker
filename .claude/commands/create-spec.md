@@ -60,6 +60,8 @@ Read these files before writing the spec:
 - `database/db.py` — existing schema and functions
 - All files in `.claude/specs/` — avoid duplicating existing specs
 
+Check `CLAUDE.md` to confirm the requested step is not already
+marked complete. If it is, warn the user and stop.
 
 ## Step 7 — Write the spec
 Generate a spec document with this exact structure:
