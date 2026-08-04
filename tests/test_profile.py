@@ -4,6 +4,13 @@ import re
 from pathlib import Path
 
 
+# Reusable Unicode byte strings — the response body is bytes, so we
+# can't write `b"₹0.00"` directly (Python raises a SyntaxError on
+# non-ASCII bytes literals). Encode once at import time.
+INR_ZERO = "₹0.00".encode("utf-8")           # total spent / grand total
+INR_TOP_PLACEHOLDER = "—".encode("utf-8")    # top category fallback
+
+
 # Helper ------------------------------------------------------------
 
 def _login(client):
@@ -196,3 +203,96 @@ def test_profile_template_uses_no_hex_colors():
     assert hex_matches == [], (
         f"profile.html must not contain hex color values; found {hex_matches}"
     )
+
+
+# Live-data behaviour (Step 5) -------------------------------------------
+# These tests prove the route reads from the DB rather than serving the
+# Step 4 hardcoded data. They rely on the autouse `reset_db` fixture from
+# conftest.py to start each test from a freshly-seeded demo user, then
+# add a second user via the register endpoint to exercise isolation.
+
+def _register(client, name, email, password="password123"):
+    """Register a new user. Auto-signs them in; caller logs out if needed."""
+    return client.post(
+        "/register",
+        data={
+            "name": name,
+            "email": email,
+            "password": password,
+            "confirm_password": password,
+        },
+        follow_redirects=False,
+    )
+
+
+def test_profile_shows_signed_in_users_own_data(client):
+    """The profile page must reflect the actual signed-in user's row,
+    not the Step 4 hardcoded "Demo User" / "demo@spendly.com" literals."""
+    # Register a fresh user (auto-signed in by the register endpoint).
+    _register(client, "Asha Raman", "asha@example.com")
+
+    resp = client.get("/profile", follow_redirects=False)
+    assert resp.status_code == 200
+    body = resp.data
+
+    # The new user's identity is shown.
+    assert b"Asha Raman" in body
+    assert b"asha@example.com" in body
+    # The seeded demo user's identity is NOT shown.
+    assert b"Demo User" not in body
+    assert b"demo@spendly.com" not in body
+
+
+def test_profile_isolates_expenses_between_users(client):
+    """Signed in as user B, the page shows only user B's expenses.
+    Demo User's 8 seeded expenses must not leak into user B's view."""
+    # Sanity check: as demo user, the seeded expenses are visible.
+    _login(client)
+    demo_body = client.get("/profile", follow_redirects=False).data
+    assert b"Sunday breakfast" in demo_body
+    assert b"BookMyShow movie ticket" in demo_body
+
+    # Log out, then register a brand-new user with zero expenses.
+    client.get("/logout", follow_redirects=False)
+    _register(client, "Empty User", "empty@example.com")
+
+    resp = client.get("/profile", follow_redirects=False)
+    assert resp.status_code == 200
+    body = resp.data
+
+    # Empty-state values are rendered.
+    assert INR_ZERO in body
+    # The transactions-count stat is the literal "0".
+    assert b">0<" in body
+    # Demo User's expense descriptions must not leak.
+    assert b"Sunday breakfast" not in body
+    assert b"BookMyShow movie ticket" not in body
+    assert b"Rapido auto to airport" not in body
+
+
+def test_profile_empty_user_renders_cleanly(client):
+    """A user with zero expenses gets a 200, sane empty-state values,
+    and the navbar greeting reflects their actual name."""
+    _register(client, "Brand New", "brandnew@example.com")
+
+    resp = client.get("/profile", follow_redirects=False)
+    assert resp.status_code == 200
+    body = resp.data
+
+    # User-info card shows the new user's name and email.
+    assert b"Brand New" in body
+    assert b"brandnew@example.com" in body
+
+    # Total spent is zero.
+    assert INR_ZERO in body
+
+    # The transactions stat value is "0" (matches the seeded-step 4
+    # formatting, which renders counts as bare integers).
+    assert b">0<" in body
+
+    # Top category falls back to an em dash when there are no expenses.
+    assert INR_TOP_PLACEHOLDER + b"</span>" in body
+
+    # The navbar greeting shows the new user's name, not "Demo User".
+    assert b"Hi, Brand New" in body
+    assert b"Hi, Demo User" not in body

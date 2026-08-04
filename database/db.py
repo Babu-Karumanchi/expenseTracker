@@ -128,3 +128,72 @@ def verify_password(user, password):
     if user is None:
         return False
     return check_password_hash(user["password_hash"], password)
+
+
+def get_user_by_id(user_id):
+    """Fetch a user row by id. Returns None if not found."""
+    conn = get_db()
+    try:
+        return conn.execute(
+            "SELECT id, name, email, created_at FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def get_user_expenses(user_id):
+    """List expenses for a user, newest first. Returns [] if none.
+
+    Sort order is `date DESC, id DESC` so ties on the same date stay stable
+    (insertion order), matching the visual order of the profile page.
+    """
+    conn = get_db()
+    try:
+        return conn.execute(
+            """
+            SELECT id, user_id, amount, category, date, description
+            FROM expenses
+            WHERE user_id = ?
+            ORDER BY date DESC, id DESC
+            """,
+            (user_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def get_user_stats(user_id):
+    """Aggregate stats for a user's profile page.
+
+    Returns a dict with: total (float), count (int), top_category (str | None),
+    top_category_total (float). When the user has no expenses, total is 0.0,
+    count is 0, and top_category/top_category_total are None.
+    """
+    conn = get_db()
+    try:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(amount), 0.0) AS total, COUNT(*) AS cnt
+            FROM expenses WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        top = conn.execute(
+            """
+            SELECT category, SUM(amount) AS cat_total
+            FROM expenses WHERE user_id = ?
+            GROUP BY category
+            ORDER BY cat_total DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+        return {
+            "total": float(row["total"]),
+            "count": int(row["cnt"]),
+            "top_category": top["category"] if top is not None else None,
+            "top_category_total": float(top["cat_total"]) if top is not None else None,
+        }
+    finally:
+        conn.close()
