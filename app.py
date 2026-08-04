@@ -1,6 +1,7 @@
 import os
 import re
 import sqlite3
+from datetime import datetime
 
 from flask import Flask, render_template, request, redirect, url_for, session
 
@@ -10,6 +11,9 @@ from database.db import (
     seed_db,
     create_user,
     get_user_by_email,
+    get_user_by_id,
+    get_user_expenses,
+    get_user_stats,
     verify_password,
 )
 
@@ -150,61 +154,98 @@ def logout():
 
 @app.route("/profile")
 def profile():
-    """Render the profile page with hardcoded data (Step 4 — UI only).
+    """Render the profile page with live DB data for the signed-in user.
 
-    Step 5 will replace these dicts/lists with real queries against the
-    `users` and `expenses` tables. Authentication is still enforced at
-    the route layer: an empty session redirects to /login before any
-    template logic runs.
+    Auth guard: an empty session redirects to /login before any DB call.
+    The user row is fetched by id; if it disappears between requests (e.g.
+    account deleted), the session is cleared and the user is redirected.
+    Stats, transactions, and categories are computed in pure Python from
+    `get_user_expenses(...)` so DB logic stays in `database/db.py`.
     """
     if not session.get("user_id"):
         return redirect(url_for("login"))
 
-    # Per spec: hardcoded context, no DB calls in this step.
-    # Values mirror the seeded demo expenses so the page feels coherent
-    # with what the user will see once Step 5 wires real queries.
+    user_row = get_user_by_id(session["user_id"])
+    if user_row is None:
+        session.clear()
+        return redirect(url_for("login"))
+
+    # User info card -------------------------------------------------------
+    name = user_row["name"]
+    member_since = datetime.strptime(
+        user_row["created_at"], "%Y-%m-%d %H:%M:%S"
+    ).strftime("%B %Y")
     user = {
-        "name": "Demo User",
-        "email": "demo@spendly.com",
-        "member_since": "August 2026",
-        "initial": "D",
+        "name": name,
+        "email": user_row["email"],
+        "member_since": member_since,
+        "initial": name[0].upper() if name else "?",
     }
 
+    # Stats row ------------------------------------------------------------
+    user_stats = get_user_stats(session["user_id"])
+    if user_stats["top_category"] is None:
+        top_category_label = "—"
+        top_category_meta = "—"
+    else:
+        top_category_label = user_stats["top_category"]
+        top_category_meta = f"₹{user_stats['top_category_total']:,.2f}"
+
     stats = [
-        {"label": "Total spent",   "value": "₹8,148.00", "meta": "August 2026"},
-        {"label": "Transactions",  "value": "8",          "meta": "this month"},
-        {"label": "Top category",  "value": "Bills",      "meta": "₹2,200.00"},
+        {"label": "Total spent",  "value": f"₹{user_stats['total']:,.2f}", "meta": member_since},
+        {"label": "Transactions", "value": str(user_stats["count"]),      "meta": "this month"},
+        {"label": "Top category", "value": top_category_label,            "meta": top_category_meta},
     ]
 
-    # All 8 seeded expenses, newest first. Each row carries a running
-    # cumulative balance so the table can show "what the cumulative spend
-    # would be up to and including this row" — the top row equals the
-    # total spent in the stats row above.
-    transactions = [
-        {"date": "2026-08-22", "description": "Sunday breakfast",        "category": "Food",          "category_class": "food",          "amount": "₹380.00",    "balance": "₹8,148.00"},
-        {"date": "2026-08-15", "description": "Household supplies",      "category": "Other",         "category_class": "other",         "amount": "₹320.00",    "balance": "₹7,768.00"},
-        {"date": "2026-08-12", "description": "T-shirt from Decathlon",  "category": "Shopping",      "category_class": "shopping",      "amount": "₹1,799.00",  "balance": "₹7,448.00"},
-        {"date": "2026-08-08", "description": "BookMyShow movie ticket", "category": "Entertainment", "category_class": "entertainment", "amount": "₹499.00",    "balance": "₹5,649.00"},
-        {"date": "2026-08-05", "description": "Pharmacy — vitamins",     "category": "Health",        "category_class": "health",        "amount": "₹650.00",    "balance": "₹5,150.00"},
-        {"date": "2026-08-03", "description": "Electricity bill — Aug",  "category": "Bills",         "category_class": "bills",         "amount": "₹2,200.00",  "balance": "₹4,500.00"},
-        {"date": "2026-08-02", "description": "Rapido auto to airport",  "category": "Transport",     "category_class": "transport",     "amount": "₹1,850.00",  "balance": "₹2,300.00"},
-        {"date": "2026-08-01", "description": "Lunch at office canteen", "category": "Food",          "category_class": "food",          "amount": "₹450.00",    "balance": "₹450.00"},
-    ]
+    # Transactions table — newest first, with running cumulative balance.
+    # Balance = sum of this row's amount and every row that came before it
+    # on the page (i.e. older rows). The top (newest) row always equals
+    # the grand total, matching the "Total spent" stat above.
+    expense_rows = get_user_expenses(session["user_id"])
+    grand_total = user_stats["total"]
 
-    # Sorted high→low by total so the table reads with the biggest
-    # spending categories at the top. `count` is the number of expenses
-    # in that category; `percentage` is that category's share of the
-    # August total (₹8,148.00). `bar_class` keeps the existing color
-    # tokens used elsewhere on the page.
-    categories = [
-        {"name": "Bills",         "total": "₹2,200.00", "count": 1, "percentage": 27.0, "bar_class": "bills"},
-        {"name": "Transport",     "total": "₹1,850.00", "count": 1, "percentage": 22.7, "bar_class": "transport"},
-        {"name": "Shopping",      "total": "₹1,799.00", "count": 1, "percentage": 22.1, "bar_class": "shopping"},
-        {"name": "Food",          "total": "₹830.00",   "count": 2, "percentage": 10.2, "bar_class": "food"},
-        {"name": "Health",        "total": "₹650.00",   "count": 1, "percentage":  8.0, "bar_class": "health"},
-        {"name": "Entertainment", "total": "₹499.00",   "count": 1, "percentage":  6.1, "bar_class": "entertainment"},
-        {"name": "Other",         "total": "₹320.00",   "count": 1, "percentage":  3.9, "bar_class": "other"},
-    ]
+    transactions = []
+    # Walk oldest -> newest to accumulate, then re-apply in display order.
+    cumulative = [0.0] * len(expense_rows)
+    running = 0.0
+    for i in range(len(expense_rows) - 1, -1, -1):
+        running += float(expense_rows[i]["amount"])
+        cumulative[i] = running
+
+    for row, acc in zip(expense_rows, cumulative):
+        transactions.append({
+            "date": row["date"],
+            "description": row["description"] or "",
+            "category": row["category"],
+            "category_class": row["category"].lower(),
+            "amount": f"₹{row['amount']:,.2f}",
+            "balance": f"₹{acc:,.2f}",
+        })
+
+    # Categories table — high -> low by total, with count and percentage.
+    # Aggregation is done in Python so we issue one DB query
+    # (`get_user_expenses`) instead of one per category.
+    by_category = {}
+    for row in expense_rows:
+        cat = row["category"]
+        if cat not in by_category:
+            by_category[cat] = {"total": 0.0, "count": 0}
+        by_category[cat]["total"] += float(row["amount"])
+        by_category[cat]["count"] += 1
+
+    categories = []
+    for cat, agg in sorted(by_category.items(), key=lambda kv: -kv[1]["total"]):
+        if grand_total > 0:
+            pct = round((agg["total"] / grand_total) * 100, 1)
+        else:
+            pct = 0.0
+        categories.append({
+            "name": cat,
+            "total": f"₹{agg['total']:,.2f}",
+            "count": agg["count"],
+            "percentage": pct,
+            "bar_class": cat.lower(),
+        })
 
     return render_template(
         "profile.html",
