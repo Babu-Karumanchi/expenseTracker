@@ -142,52 +142,73 @@ def get_user_by_id(user_id):
         conn.close()
 
 
-def get_user_expenses(user_id):
+def get_user_expenses(user_id, date_from=None, date_to=None):
     """List expenses for a user, newest first. Returns [] if none.
 
     Sort order is `date DESC, id DESC` so ties on the same date stay stable
     (insertion order), matching the visual order of the profile page.
+
+    Optional `date_from` / `date_to` are inclusive ISO `YYYY-MM-DD` bounds
+    (strings). When a bound is supplied the corresponding `date >= ?` /
+    `date <= ?` predicate is added to the WHERE clause; when both are None
+    the original `WHERE user_id = ?` query is used unchanged.
     """
     conn = get_db()
     try:
-        return conn.execute(
-            """
-            SELECT id, user_id, amount, category, date, description
-            FROM expenses
-            WHERE user_id = ?
-            ORDER BY date DESC, id DESC
-            """,
-            (user_id,),
-        ).fetchall()
+        conditions = ["user_id = ?"]
+        params = [user_id]
+        if date_from:
+            conditions.append("date >= ?")
+            params.append(date_from)
+        if date_to:
+            conditions.append("date <= ?")
+            params.append(date_to)
+        sql = (
+            "SELECT id, user_id, amount, category, date, description "
+            "FROM expenses "
+            "WHERE " + " AND ".join(conditions) + " "
+            "ORDER BY date DESC, id DESC"
+        )
+        return conn.execute(sql, tuple(params)).fetchall()
     finally:
         conn.close()
 
 
-def get_user_stats(user_id):
+def get_user_stats(user_id, date_from=None, date_to=None):
     """Aggregate stats for a user's profile page.
 
     Returns a dict with: total (float), count (int), top_category (str | None),
     top_category_total (float). When the user has no expenses, total is 0.0,
     count is 0, and top_category/top_category_total are None.
+
+    Optional `date_from` / `date_to` are inclusive ISO `YYYY-MM-DD` bounds
+    applied to BOTH the SUM/COUNT query and the top-category subquery so the
+    stats reflect the same filtered window as `get_user_expenses(...)`.
     """
     conn = get_db()
     try:
+        conditions = ["user_id = ?"]
+        params = [user_id]
+        if date_from:
+            conditions.append("date >= ?")
+            params.append(date_from)
+        if date_to:
+            conditions.append("date <= ?")
+            params.append(date_to)
+        where_sql = " AND ".join(conditions)
+
         row = conn.execute(
-            """
-            SELECT COALESCE(SUM(amount), 0.0) AS total, COUNT(*) AS cnt
-            FROM expenses WHERE user_id = ?
-            """,
-            (user_id,),
+            "SELECT COALESCE(SUM(amount), 0.0) AS total, COUNT(*) AS cnt "
+            "FROM expenses WHERE " + where_sql,
+            tuple(params),
         ).fetchone()
         top = conn.execute(
-            """
-            SELECT category, SUM(amount) AS cat_total
-            FROM expenses WHERE user_id = ?
-            GROUP BY category
-            ORDER BY cat_total DESC
-            LIMIT 1
-            """,
-            (user_id,),
+            "SELECT category, SUM(amount) AS cat_total "
+            "FROM expenses WHERE " + where_sql + " "
+            "GROUP BY category "
+            "ORDER BY cat_total DESC "
+            "LIMIT 1",
+            tuple(params),
         ).fetchone()
         return {
             "total": float(row["total"]),

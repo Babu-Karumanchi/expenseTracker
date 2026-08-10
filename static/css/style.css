@@ -357,7 +357,7 @@ a { color: inherit; text-decoration: none; }
     background: transparent;
     color: var(--ink-soft);
     padding: 0.65rem 1.5rem;
-    border-radius: var(--radius-sm);
+    border-radius: 999px;
     font-size: 0.9rem;
     font-weight: 500;
     border: 1px solid var(--border);
@@ -920,7 +920,7 @@ a { color: inherit; text-decoration: none; }
    the existing 900px narrow-screen breakpoint. */
 .profile-tables-row {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 2fr 1fr;
     gap: 1.5rem;
     align-items: start;
 }
@@ -1052,4 +1052,193 @@ a { color: inherit; text-decoration: none; }
     .profile-avatar { width: 56px; height: 56px; font-size: 1.5rem; }
     .profile-name { font-size: 1.3rem; }
     .profile-table-num--wide { width: 140px; }
+}
+
+/* Profile filter bar ------------------------------------------------ */
+/* Sits between the stats row and the two-card tables row. Pure CSS;
+   the From / To inputs are <input type="date"> so the browser handles
+   the ISO conversion for free. Reuses the existing card / danger
+   tokens rather than introducing new colours. */
+
+.profile-filter-card {
+    background: var(--paper-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 1.25rem 1.5rem;
+}
+
+.profile-filter {
+    display: flex;
+    align-items: flex-end;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.profile-filter-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    min-width: 160px;
+}
+
+.profile-filter-input { font-family: var(--font-body); }
+
+.profile-filter-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-left: auto;
+}
+
+.profile-filter-status {
+    margin-top: 0.85rem;
+    font-size: 0.85rem;
+    color: var(--ink-muted);
+}
+
+/* Same colour recipe as the .auth-error block at the top of the file:
+   --danger-light bg + --danger text + the standard --border frame. */
+.profile-filter-status--danger {
+    color: var(--danger);
+    background: var(--danger-light);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.5rem 0.75rem;
+    margin-top: 0.85rem;
+}
+
+@media (max-width: 900px) {
+    .profile-filter { flex-direction: column; align-items: stretch; }
+    .profile-filter-actions { margin-left: 0; }
+}
+
+/* Preset pills ----------------------------------------------------- */
+/* Shortcut tabs above the date inputs. Active = solid dark-green
+   background + white text (--accent token). Inactive = light gray
+   surface + dark text. Clicking a pill submits /profile?preset=... */
+
+.profile-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1.25rem;
+}
+
+.profile-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.45rem 1.1rem;
+    border-radius: 999px;
+    background: var(--paper-warm);
+    color: var(--ink-soft);
+    border: 1px solid transparent;
+    font-family: var(--font-body);
+    font-size: 0.85rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+    text-decoration: none;
+}
+
+.profile-pill:hover {
+    background: var(--border-soft);
+    color: var(--ink);
+}
+
+.profile-pill--active {
+    background: var(--accent);
+    color: var(--paper);
+    border-color: var(--accent);
+}
+
+.profile-pill--active:hover {
+    background: var(--accent);
+    color: var(--paper);
+}
+
+.profile-filter-sep {
+    align-self: flex-end;
+    padding-bottom: 0.6rem;
+    font-size: 0.9rem;
+    color: var(--ink-muted);
+}
+
+/* Apply button — pill-shaped, dark green, white text.             */
+
+.btn-apply {
+    display: inline-block;
+    background: var(--accent);
+    color: var(--paper);
+    padding: 0.55rem 1.4rem;
+    border-radius: 999px;
+    border: none;
+    font-family: var(--font-body);
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.btn-apply:hover { background: var(--ink); }
+
+/* Category list (stacked) ------------------------------------------ */
+/* One row per category: badge on the left, total amount on the
+   right, then a colored bar whose length encodes the percentage. The
+   bar IS the percentage — no explicit % number is rendered. */
+
+.profile-category-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.profile-category-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.profile-category-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.profile-category-total {
+    font-family: var(--font-body);
+    font-weight: 700;
+    font-size: 1.05rem;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+}
+
+.profile-category-track {
+    height: 6px;
+    background: var(--border-soft);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.profile-category-fill {
+    height: 100%;
+    border-radius: 999px;
+    transition: width 0.6s ease;
+}
+
+/* Reuses the existing --accent-2 / --orange / --red / --purple
+   palette tokens for category bars. Each maps to a category name. */
+.profile-category-fill--food          { background: var(--orange); }
+.profile-category-fill--transport     { background: var(--accent-2); }
+.profile-category-fill--bills         { background: var(--accent); }
+.profile-category-fill--health        { background: var(--red); }
+.profile-category-fill--entertainment { background: var(--purple); }
+.profile-category-fill--shopping      { background: var(--teal-dark); }
+.profile-category-fill--other         { background: var(--ink-faint); }
+
+@media (max-width: 900px) {
+    .profile-presets { gap: 0.4rem; }
+    .profile-pill { padding: 0.4rem 0.9rem; font-size: 0.8rem; }
 }

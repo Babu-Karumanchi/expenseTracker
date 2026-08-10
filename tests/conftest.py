@@ -1,61 +1,89 @@
-"""Pytest fixtures for Spendly.
+"""Shared pytest fixtures for the Spendly test suite.
 
-CRITICAL IMPORT ORDER
----------------------
-`app.py` runs `init_db()` and `seed_db()` at module-import time
-(see the `with app.app_context():` block at the bottom of app.py).
-That import happens before any test runs, so we MUST redirect the
-SQLite path BEFORE `from app import app` is executed at the bottom
-of this file.
-
-To do that, we patch `database.db.DB_PATH` at conftest-module load
-time, then import `app`. The patched path persists because Python
-caches the module — `database.db` is a single object, and every
-helper inside it calls `get_db()`, which reads `DB_PATH` at call
-time (not at import time).
+The dev DB path in `database/db.py` is swapped to a temp file *before*
+`app` is imported — this is required because `app.py` runs `init_db()`
+and `seed_db()` at module load against the path that's active at that
+moment. Every test then gets a clean schema + a fresh demo user via the
+`reset_db` autouse fixture below.
 """
-import sys
-import tempfile
-from pathlib import Path
 
-# Pick a per-pytest-run temp file. tempfile.gettempdir() exists on all
-# platforms; pytest itself doesn't clean it up, but each test re-wipes
-# the tables via the autouse `reset_db` fixture below, and on a fresh
-# machine the file simply does not exist yet.
-_TEST_DB = Path(tempfile.gettempdir()) / "spendly_test.db"
-if _TEST_DB.exists():
-    _TEST_DB.unlink()
+import pytest
 
-# Patch the DB path BEFORE importing app.
-import database.db as _db  # noqa: E402
+# IMPORTANT: import order. Swap DB_PATH before `app` loads.
+from database import db as _db
 
-_db.DB_PATH = _TEST_DB
+import app as _app_module  # noqa: E402  (must follow the DB_PATH swap)
 
-from app import app  # noqa: E402  (triggers init_db + seed_db against _TEST_DB)
 
-import pytest  # noqa: E402
+flask_app = _app_module.app
+# Use a per-test temp DB so we never touch the dev expense_tracker.db.
+_TEST_DB_PATH = None
+
+
+@pytest.fixture(autouse=True)
+def reset_db(tmp_path, monkeypatch):
+    """Give every test a clean schema + the seeded demo user."""
+    test_db = tmp_path / "spendly_test.db"
+    monkeypatch.setattr(_db, "DB_PATH", test_db)
+    _db.init_db()
+    _db.seed_db()
+    yield
+    # tmp_path is cleaned up by pytest automatically.
 
 
 @pytest.fixture
 def client():
-    """A Flask test client bound to the real app object."""
-    return app.test_client()
+    """Flask test client with TESTING enabled."""
+    flask_app.config["TESTING"] = True
+    return flask_app.test_client()
 
 
-@pytest.fixture(autouse=True)
-def reset_db():
-    """Wipe the users/expenses tables and re-seed between every test.
+# ------------------------------------------------------------------ #
+# Factory helpers                                                     #
+# ------------------------------------------------------------------ #
 
-    The seeded demo user survives at the start of each test; tests that
-    register new users do not collide with the demo user because the
-    happy-path test uses a unique email.
-    """
+def make_user(name="Test User", email="test@example.com", password="password123"):
+    """Insert a user via the existing `create_user` helper. Returns the id."""
+    return _db.create_user(name, email, password)
+
+
+def make_expense(user_id, amount, category, date, description=""):
+    """Insert one expense row directly so tests can stage exact dates/amounts."""
     conn = _db.get_db()
     try:
-        conn.execute("DELETE FROM expenses")
-        conn.execute("DELETE FROM users")
+        conn.execute(
+            "INSERT INTO expenses (user_id, amount, category, date, description) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, amount, category, date, description),
+        )
         conn.commit()
     finally:
         conn.close()
-    _db.seed_db()
-    yield
+
+
+def _login(client, email, password):
+    """POST /login with the demo credentials; assert it redirects to /profile."""
+    resp = client.post(
+        "/login",
+        data={"email": email, "password": password},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302, f"login failed: {resp.status_code} {resp.data!r}"
+    assert "/profile" in resp.headers["Location"]
+    return resp
+
+
+@pytest.fixture
+def seeded_user():
+    """A fresh user with 3 expenses spread across 3 dates for filter tests.
+
+    Dates: 2026-01-15, 2026-04-15, 2026-08-15. Each row has a distinct
+    amount and category so any single-date filter isolates one row.
+    """
+    user_id = make_user(
+        name="Filter User", email="filter@example.com", password="password123"
+    )
+    make_expense(user_id, 450.00, "Food",      "2026-01-15", "January groceries")
+    make_expense(user_id, 1850.00, "Transport", "2026-04-15", "April commute")
+    make_expense(user_id, 2200.00, "Bills",     "2026-08-15", "August electricity")
+    return user_id

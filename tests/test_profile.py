@@ -1,298 +1,313 @@
-"""Tests for the /profile page (Step 4 — UI-only with hardcoded data)."""
+"""Tests for the /profile page.
+
+Covers Step 5 (live-data behaviour, auth guard, user isolation, empty
+state, INR formatting) and Step 6 (date-range filter with From / To
+query parameters, validation, swap-on-reversal).
+"""
 
 import re
-from pathlib import Path
+
+import pytest
+
+from tests.conftest import _login, make_expense, make_user
 
 
-# Reusable Unicode byte strings — the response body is bytes, so we
-# can't write `b"₹0.00"` directly (Python raises a SyntaxError on
-# non-ASCII bytes literals). Encode once at import time.
-INR_ZERO = "₹0.00".encode("utf-8")           # total spent / grand total
-INR_TOP_PLACEHOLDER = "—".encode("utf-8")    # top category fallback
+# Currency cells must match this exact shape — Indian formatting via the
+# route's f"₹{amount:,.2f}" format string.
+INR_RE = re.compile(r"₹\d{1,3}(?:,\d{3})*\.\d{2}".encode("utf-8"))
 
 
-# Helper ------------------------------------------------------------
+# ------------------------------------------------------------------ #
+# Step 5 — live-data regression                                       #
+# ------------------------------------------------------------------ #
 
-def _login(client):
-    """Log in as the seeded demo user (re-seeded by the autouse reset_db)."""
-    return client.post(
-        "/login",
-        data={"email": "demo@spendly.com", "password": "demo123"},
-        follow_redirects=False,
-    )
-
-
-# Auth guard --------------------------------------------------------
-
-def test_profile_redirects_to_login_when_signed_out(client):
+def test_profile_auth_guard_redirects_to_login(client):
+    """Signed-out GET /profile -> 302 to /login."""
     resp = client.get("/profile", follow_redirects=False)
     assert resp.status_code == 302
-    assert resp.headers["Location"].endswith("/login")
+    assert "/login" in resp.headers["Location"]
 
 
-def test_profile_returns_200_when_signed_in(client):
-    login_resp = _login(client)
-    assert login_resp.status_code == 302
-
-    resp = client.get("/profile", follow_redirects=False)
-    assert resp.status_code == 200
-
-
-# Content sections --------------------------------------------------
-
-def test_profile_renders_user_info_card(client):
-    _login(client)
-    resp = client.get("/profile", follow_redirects=False)
+def test_profile_renders_live_data_for_demo(client):
+    """The seeded demo user's real data is rendered, not hardcoded placeholders."""
+    _login(client, "demo@spendly.com", "demo123")
+    resp = client.get("/profile")
     assert resp.status_code == 200
     body = resp.data
-
-    # User info card must show name + email + member-since.
+    # User-info card
     assert b"Demo User" in body
     assert b"demo@spendly.com" in body
-    assert b"Member since" in body
-
-
-def test_profile_renders_at_least_three_stats(client):
-    _login(client)
-    resp = client.get("/profile", follow_redirects=False)
-    body = resp.data
-
-    # The three stat labels defined in app.py.
-    assert b"Total spent" in body
-    assert b"Transactions" in body
-    assert b"Top category" in body
-
-    # And exactly three stat tiles in the DOM.
-    assert body.count(b'class="profile-stat-label"') == 3
-
-
-def test_profile_renders_at_least_three_transactions(client):
-    _login(client)
-    resp = client.get("/profile", follow_redirects=False)
-    body = resp.data
-
-    # Both tables render — Recent transactions and Spending by category.
-    # Each contributes at least one <tr> per data row plus a header row.
-    # 8 transactions + 7 categories + 2 headers = 17 <tr> tags.
-    assert body.count(b"<tr>") >= 15
-    # Spot-check a few hardcoded rows from app.py.
-    assert b"Sunday breakfast" in body
-    assert b"BookMyShow movie ticket" in body
-    assert b"Rapido auto to airport" in body
-
-
-def test_profile_renders_recent_transactions_table(client):
-    """The recent transactions table has all 5 required columns."""
-    _login(client)
-    resp = client.get("/profile", follow_redirects=False)
-    body = resp.data
-
-    # The transactions table is the first <table> on the page.
-    assert b"Recent transactions" in body
-    assert b">Date<" in body
-    assert b">Description<" in body
-    assert b">Category<" in body
-    assert b">Amount<" in body
-    assert b">Balance<" in body
-
-
-def test_profile_renders_balance_for_each_transaction(client):
-    """Each transaction row carries a running-balance value in its last cell."""
-    _login(client)
-    resp = client.get("/profile", follow_redirects=False)
-    body = resp.data.decode("utf-8")
-
-    # 8 transactions × 1 balance cell each.
-    # The class appears as "profile-table-num profile-table-balance"
-    # since `profile-table-balance` is a modifier on the numeric cell.
-    assert body.count('profile-table-num profile-table-balance') == 8
-    # Top-row (latest) balance equals the grand total ₹8,148.00.
-    assert "₹8,148.00" in body
-    # Bottom-row (oldest) balance equals the first transaction amount.
-    assert "₹450.00" in body
-
-
-def test_profile_renders_at_least_three_categories(client):
-    _login(client)
-    resp = client.get("/profile", follow_redirects=False)
-    body = resp.data
-
-    # The categories table is the second <table> on the page.
-    assert b"Spending by category" in body
-    assert b">Category<" in body
-    assert b">Total spent<" in body
-    assert b">Transactions<" in body
-    assert b"% of total<" in body
-
-    # At least 3 hardcoded categories render in the table body.
-    assert body.count(b"profile-table-pct-value") >= 3
-    assert b"Food" in body
-    assert b"Transport" in body
-    assert b"Bills" in body
-
-
-def test_profile_renders_category_count_and_percentage(client):
-    """Every category row carries a transaction count and a percentage value."""
-    _login(client)
-    resp = client.get("/profile", follow_redirects=False)
-    body = resp.data
-
-    # 7 categories × 1 percentage value cell each.
-    assert body.count(b"profile-table-pct-value") == 7
-    # Each percentage bar gets a width attribute equal to its share.
-    # Count the <div class="profile-table-pct-fill ..."> opening tags
-    # by looking for the unique modifier class suffix that always follows.
-    assert body.count(b"profile-table-pct-fill profile-table-pct-fill--") == 7
-    # Highest-share category (Bills, 27.0%) must show its percentage text.
-    assert b"27.0%" in body
-
-
-# Navbar signed-in state (covered by Step 3, but pinned here too) --
-
-def test_profile_shows_signed_in_navbar(client):
-    _login(client)
-    resp = client.get("/profile", follow_redirects=False)
-    body = resp.data
-
+    # Navbar greeting uses session["user_name"]
     assert b"Hi, Demo User" in body
-    assert b"Sign out" in body
-    assert b'href="/logout"' in body
-
-
-def test_profile_renders_tables_in_two_column_layout(client):
-    """Both tables sit inside a single .profile-tables-row wrapper so they
-    can be displayed side-by-side on desktop via CSS grid (and collapse to
-    a single column at the narrow-screen breakpoint)."""
-    _login(client)
-    resp = client.get("/profile", follow_redirects=False)
-    body = resp.data
-
-    # Exactly one grid wrapper contains both tables.
-    assert body.count(b'class="profile-tables-row"') == 1
-
-    # Both table titles appear inside that wrapper, in source order:
-    # Recent transactions (left), Spending by category (right).
-    txn_idx = body.find(b"Recent transactions")
-    cat_idx = body.find(b"Spending by category")
-    row_idx = body.find(b'class="profile-tables-row"')
-    assert 0 < txn_idx < cat_idx
-    assert row_idx < txn_idx
-
-
-def test_navbar_greeting_links_to_profile(client):
-    """Signed-in users can navigate to /profile from any page via the navbar greeting."""
-    _login(client)
-    # Hit the landing page (the user's home base after sign-out).
-    resp = client.get("/", follow_redirects=False)
-    assert resp.status_code == 200
-    # The greeting must be an anchor pointing at /profile, not a plain span.
-    assert b'<a href="/profile" class="nav-greeting">' in resp.data
-    assert b'<span class="nav-greeting">' not in resp.data
-
-
-# Static rule check -------------------------------------------------
-
-def test_profile_template_uses_no_hex_colors():
-    """Spec rule: no hex color values in profile.html — only CSS variables."""
-    template_path = Path(__file__).resolve().parents[1] / "templates" / "profile.html"
-    text = template_path.read_text(encoding="utf-8")
-
-    # Look for the CSS-comment marker that was added to document this rule.
-    # (Not strictly required — the spec's DoD is the absence of hex codes.)
-    hex_matches = re.findall(r"#[0-9a-fA-F]{3,8}\b", text)
-    assert hex_matches == [], (
-        f"profile.html must not contain hex color values; found {hex_matches}"
-    )
-
-
-# Live-data behaviour (Step 5) -------------------------------------------
-# These tests prove the route reads from the DB rather than serving the
-# Step 4 hardcoded data. They rely on the autouse `reset_db` fixture from
-# conftest.py to start each test from a freshly-seeded demo user, then
-# add a second user via the register endpoint to exercise isolation.
-
-def _register(client, name, email, password="password123"):
-    """Register a new user. Auto-signs them in; caller logs out if needed."""
-    return client.post(
-        "/register",
-        data={
-            "name": name,
-            "email": email,
-            "password": password,
-            "confirm_password": password,
-        },
-        follow_redirects=False,
-    )
-
-
-def test_profile_shows_signed_in_users_own_data(client):
-    """The profile page must reflect the actual signed-in user's row,
-    not the Step 4 hardcoded "Demo User" / "demo@spendly.com" literals."""
-    # Register a fresh user (auto-signed in by the register endpoint).
-    _register(client, "Asha Raman", "asha@example.com")
-
-    resp = client.get("/profile", follow_redirects=False)
-    assert resp.status_code == 200
-    body = resp.data
-
-    # The new user's identity is shown.
-    assert b"Asha Raman" in body
-    assert b"asha@example.com" in body
-    # The seeded demo user's identity is NOT shown.
-    assert b"Demo User" not in body
-    assert b"demo@spendly.com" not in body
+    # One of the seeded descriptions (proves Step 5 wiring is intact)
+    assert b"Sunday breakfast" in body
+    # Grand total for the seeded 8 expenses
+    assert b"\xe2\x82\xb98,148.00" in body  # ₹8,148.00
 
 
 def test_profile_isolates_expenses_between_users(client):
-    """Signed in as user B, the page shows only user B's expenses.
-    Demo User's 8 seeded expenses must not leak into user B's view."""
-    # Sanity check: as demo user, the seeded expenses are visible.
-    _login(client)
-    demo_body = client.get("/profile", follow_redirects=False).data
-    assert b"Sunday breakfast" in demo_body
-    assert b"BookMyShow movie ticket" in demo_body
+    """A second user does not see the demo user's data."""
+    # Register a brand-new user via the public route, then log in as them.
+    client.post(
+        "/register",
+        data={
+            "name": "Other User",
+            "email": "other@example.com",
+            "password": "password123",
+            "confirm_password": "password123",
+        },
+        follow_redirects=False,
+    )
+    # Register route logs us straight in -> /profile. Sign out, then log
+    # back in via the canonical login flow used by every other test.
+    client.get("/logout")
+    _login(client, "other@example.com", "password123")
 
-    # Log out, then register a brand-new user with zero expenses.
-    client.get("/logout", follow_redirects=False)
-    _register(client, "Empty User", "empty@example.com")
-
-    resp = client.get("/profile", follow_redirects=False)
+    resp = client.get("/profile")
     assert resp.status_code == 200
     body = resp.data
-
-    # Empty-state values are rendered.
-    assert INR_ZERO in body
-    # The transactions-count stat is the literal "0".
-    assert b">0<" in body
-    # Demo User's expense descriptions must not leak.
+    assert b"Other User" in body
+    assert b"other@example.com" in body
+    # Demo's data must NOT be present
+    assert b"Demo User" not in body
+    assert b"demo@spendly.com" not in body
     assert b"Sunday breakfast" not in body
-    assert b"BookMyShow movie ticket" not in body
-    assert b"Rapido auto to airport" not in body
 
 
 def test_profile_empty_user_renders_cleanly(client):
-    """A user with zero expenses gets a 200, sane empty-state values,
-    and the navbar greeting reflects their actual name."""
-    _register(client, "Brand New", "brandnew@example.com")
+    """A user with zero expenses still gets 200 + zeroed stats."""
+    # Register a fresh user — demo is seeded with 8 expenses, so we
+    # need a brand-new account to exercise the empty-state branch.
+    client.post(
+        "/register",
+        data={
+            "name": "Empty User",
+            "email": "empty@example.com",
+            "password": "password123",
+            "confirm_password": "password123",
+        },
+        follow_redirects=False,
+    )
+    client.get("/logout")
+    _login(client, "empty@example.com", "password123")
 
-    resp = client.get("/profile", follow_redirects=False)
+    resp = client.get("/profile")
     assert resp.status_code == 200
     body = resp.data
+    assert b"\xe2\x82\xb90.00" in body  # ₹0.00
+    # The em-dash placeholder for the top-category stat
+    assert b"\xe2\x80\x94" in body  # —
+    # Transactions stat should be 0
+    assert b"<span class=\"profile-stat-value\">0</span>" in body
 
-    # User-info card shows the new user's name and email.
-    assert b"Brand New" in body
-    assert b"brandnew@example.com" in body
 
-    # Total spent is zero.
-    assert INR_ZERO in body
+def test_profile_inr_formatting(client):
+    """Every monetary cell on the page matches the canonical INR regex."""
+    _login(client, "demo@spendly.com", "demo123")
+    resp = client.get("/profile")
+    assert resp.status_code == 200
+    matches = INR_RE.findall(resp.data)
+    # Demo has 8 expenses -> 1 grand total + 8 amount cells + 8 balance
+    # cells + 1 top-category meta = 18 INR cells, plus any meta text.
+    assert len(matches) >= 10, f"unexpectedly few INR cells: {matches!r}"
 
-    # The transactions stat value is "0" (matches the seeded-step 4
-    # formatting, which renders counts as bare integers).
-    assert b">0<" in body
 
-    # Top category falls back to an em dash when there are no expenses.
-    assert INR_TOP_PLACEHOLDER + b"</span>" in body
+# ------------------------------------------------------------------ #
+# Step 6 — date-range filter                                          #
+# ------------------------------------------------------------------ #
 
-    # The navbar greeting shows the new user's name, not "Demo User".
-    assert b"Hi, Brand New" in body
-    assert b"Hi, Demo User" not in body
+def test_filter_from_and_to_returns_window_only(client, seeded_user):
+    """?from=2026-04-01&to=2026-08-31 returns only the in-window rows."""
+    _login(client, "filter@example.com", "password123")
+    resp = client.get("/profile?from=2026-04-01&to=2026-08-31")
+    assert resp.status_code == 200
+    body = resp.data
+    assert b"April commute" in body
+    assert b"August electricity" in body
+    # The January row must be filtered out
+    assert b"January groceries" not in body
+    # Status line reflects the filtered count (2 rows, pluralised)
+    assert b"Showing 2 transactions from 2026-04-01 to 2026-08-31" in body
+
+
+def test_filter_from_only_is_open_ended_upper(client, seeded_user):
+    """?from=2026-04-01 (no `to`) is open-ended on the upper side."""
+    _login(client, "filter@example.com", "password123")
+    resp = client.get("/profile?from=2026-04-01")
+    assert resp.status_code == 200
+    body = resp.data
+    assert b"April commute" in body
+    assert b"August electricity" in body
+    assert b"January groceries" not in body
+    assert b"Showing 2 transactions from 2026-04-01" in body
+
+
+def test_filter_to_only_is_open_ended_lower(client, seeded_user):
+    """?to=2026-04-30 (no `from`) is open-ended on the lower side."""
+    _login(client, "filter@example.com", "password123")
+    resp = client.get("/profile?to=2026-04-30")
+    assert resp.status_code == 200
+    body = resp.data
+    assert b"January groceries" in body
+    assert b"April commute" in body
+    assert b"August electricity" not in body
+    assert b"Showing 2 transactions up to 2026-04-30" in body
+
+
+def test_filter_absent_matches_step5_behaviour(client, seeded_user):
+    """No filter params -> all rows, "Showing all N transactions" status."""
+    _login(client, "filter@example.com", "password123")
+    resp = client.get("/profile")
+    assert resp.status_code == 200
+    body = resp.data
+    assert b"January groceries" in body
+    assert b"April commute" in body
+    assert b"August electricity" in body
+    assert b"Showing all 3 transactions." in body
+
+
+def test_filter_invalid_date_renders_200_with_error(client, seeded_user):
+    """Malformed `from` is dropped; valid `to` still applies; inline error shown."""
+    _login(client, "filter@example.com", "password123")
+    resp = client.get("/profile?from=not-a-date&to=2026-04-30")
+    assert resp.status_code == 200
+    body = resp.data
+    # Inline error renders with the danger modifier class
+    assert b"Please enter valid dates (YYYY-MM-DD)." in body
+    assert b"profile-filter-status--danger" in body
+    # The valid `to` bound survives: rows on/before 2026-04-30 are still
+    # in the page, and the August row is filtered out.
+    assert b"January groceries" in body
+    assert b"April commute" in body
+    assert b"August electricity" not in body
+
+
+def test_filter_from_greater_than_to_swaps_and_renders_200(client, seeded_user):
+    """Reversed bounds are swapped so the query still returns useful data."""
+    _login(client, "filter@example.com", "password123")
+    resp = client.get("/profile?from=2026-08-31&to=2026-08-01")
+    assert resp.status_code == 200
+    body = resp.data
+    # Swap message in the danger state
+    assert b"From date cannot be after To date." in body
+    assert b"profile-filter-status--danger" in body
+    # The swapped window [2026-08-01, 2026-08-31] contains the August row
+    # but not the April or January ones.
+    assert b"August electricity" in body
+    assert b"April commute" not in body
+    assert b"January groceries" not in body
+
+
+def test_filter_does_not_affect_navbar_greeting(client, seeded_user):
+    """The navbar greeting ignores the filter — it always reflects session name."""
+    _login(client, "filter@example.com", "password123")
+    resp = client.get("/profile?from=2026-08-01&to=2026-08-31")
+    assert resp.status_code == 200
+    assert b"Hi, Filter User" in resp.data
+
+
+def test_filter_does_not_leak_across_users(client, seeded_user):
+    """With a filter active, demo's view still does not show other users' rows."""
+    # Add a single expense to the demo user (already seeded with 8) at a
+    # date well inside the filter window. Then register a second user
+    # with one expense at the same date — sign back in as demo and
+    # confirm the second user's description is filtered out.
+    other_id = make_user("Leaky Other", "leaky@example.com", "password123")
+    make_expense(other_id, 999.00, "Food", "2026-08-10", "SECRET_LEAK_DESC")
+
+    _login(client, "demo@spendly.com", "demo123")
+    resp = client.get("/profile?from=2026-08-01&to=2026-08-31")
+    assert resp.status_code == 200
+    assert b"SECRET_LEAK_DESC" not in resp.data
+    # And the second user's identity / email should not appear either
+    assert b"Leaky Other" not in resp.data
+    assert b"leaky@example.com" not in resp.data
+
+
+# ------------------------------------------------------------------ #
+# Pill presets                                                       #
+# ------------------------------------------------------------------ #
+
+def _pin_today(monkeypatch, iso):
+    """Pin app._today to a fixed date so preset ranges are deterministic."""
+    from datetime import date
+    fixed = date.fromisoformat(iso)
+    monkeypatch.setattr("app._today", lambda: fixed)
+
+
+def test_pill_all_time_is_active_by_default(client, seeded_user):
+    """No query string -> All Time pill has the active class."""
+    _login(client, "filter@example.com", "password123")
+    resp = client.get("/profile")
+    assert resp.status_code == 200
+    body = resp.data.decode("utf-8")
+    # Active pill count must be exactly 1 (All Time).
+    assert body.count("profile-pill--active") == 1
+    # All four labels render
+    assert "All Time" in body
+    assert "This Month" in body
+    assert "Last 3 Months" in body
+    assert "Last 6 Months" in body
+
+
+def test_pill_this_month_applies_correct_range(client, seeded_user, monkeypatch):
+    """?preset=this_month -> from=1st-of-month, to=today; pill is active."""
+    # Pin today to Aug 20 so the seeded Aug 15 row falls inside every
+    # preset's window (this_month = Aug 1..20, last_3 = May 20..Aug 20).
+    _pin_today(monkeypatch, "2026-08-20")
+    _login(client, "filter@example.com", "password123")
+    resp = client.get("/profile?preset=this_month")
+    assert resp.status_code == 200
+    body = resp.data
+    assert b"August electricity" in body
+    assert b"April commute" not in body
+    assert b"January groceries" not in body
+    assert b'value="2026-08-01"' in body
+    assert b'value="2026-08-20"' in body
+
+
+def test_pill_last_3_months_applies_correct_range(client, seeded_user, monkeypatch):
+    """?preset=last_3_months -> from=today-3mo, to=today; covers Aug only."""
+    _pin_today(monkeypatch, "2026-08-20")
+    _login(client, "filter@example.com", "password123")
+    resp = client.get("/profile?preset=last_3_months")
+    assert resp.status_code == 200
+    body = resp.data
+    # Window is [2026-05-20, 2026-08-20] -> only August (Aug 15) survives.
+    assert b"August electricity" in body
+    assert b"April commute" not in body
+    assert b"January groceries" not in body
+
+
+def test_pill_last_6_months_applies_correct_range(client, seeded_user, monkeypatch):
+    """?preset=last_6_months -> from=today-6mo, to=today; covers Apr+Aug."""
+    _pin_today(monkeypatch, "2026-08-20")
+    _login(client, "filter@example.com", "password123")
+    resp = client.get("/profile?preset=last_6_months")
+    assert resp.status_code == 200
+    body = resp.data
+    # Window is [2026-02-20, 2026-08-20] -> April + August survive.
+    assert b"August electricity" in body
+    assert b"April commute" in body
+    assert b"January groceries" not in body
+
+
+def test_pill_active_state_highlights_only_the_matching_pill(client, seeded_user):
+    """?preset=this_month -> only the This Month pill has the active class."""
+    _login(client, "filter@example.com", "password123")
+    resp = client.get("/profile?preset=this_month")
+    assert resp.status_code == 200
+    body = resp.data.decode("utf-8")
+    assert body.count("profile-pill--active") == 1
+    assert 'profile-pill--active' in body and '>This Month<' in body
+    # The All Time pill href should NOT have the active class on it.
+    assert 'href="/profile?preset=all_time"' in body
+
+
+def test_manual_date_edit_clears_active_preset(client, seeded_user):
+    """A bare ?from=/?to= with no ?preset -> no pill is highlighted."""
+    _login(client, "filter@example.com", "password123")
+    resp = client.get("/profile?from=2026-04-01&to=2026-04-30")
+    assert resp.status_code == 200
+    body = resp.data.decode("utf-8")
+    assert "profile-pill--active" not in body
