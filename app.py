@@ -1,7 +1,7 @@
 import os
 import re
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 
 from flask import Flask, render_template, request, redirect, url_for, session
 
@@ -19,6 +19,47 @@ from database.db import (
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SPENDLY_SECRET_KEY") or "dev-only-not-for-production"
+
+# Module-level regexes — compiled once, reused on every request.
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _today():
+    """Return the current date. Wrapped in a function so tests can pin it.
+
+    Production: `date.today()`. Tests monkeypatch `app._today` to a
+    fixed date so preset ranges (this month / last 3 / last 6) are
+    deterministic regardless of the wall clock.
+    """
+    return date.today()
+
+
+# Preset id -> label. Bounds are computed in the route from the preset id
+# (`this_month` / `last_3_months` / `last_6_months` use today-anchored offsets;
+# `all_time` emits no query so the user always lands on a clean /profile URL).
+PRESETS = [
+    {"id": "all_time",       "label": "All Time"},
+    {"id": "this_month",     "label": "This Month"},
+    {"id": "last_3_months",  "label": "Last 3 Months"},
+    {"id": "last_6_months",  "label": "Last 6 Months"},
+]
+
+
+def _add_months(d, months):
+    """Return d shifted by `months` calendar months, clamped to month-end.
+
+    Used by the preset calculations so "this month" lands on the 1st
+    regardless of the current day. Negative `months` walks backwards.
+    """
+    year = d.year + (d.month - 1 + months) // 12
+    month = (d.month - 1 + months) % 12 + 1
+    # Last day of the target month: day before the 1st of the next month.
+    if month == 12:
+        next_month_first = date(year + 1, 1, 1)
+    else:
+        next_month_first = date(year, month + 1, 1)
+    last_day = (next_month_first - date(year, month, 1)).days
+    return date(year, month, min(d.day, last_day))
 
 
 # ------------------------------------------------------------------ #
@@ -159,8 +200,13 @@ def profile():
     Auth guard: an empty session redirects to /login before any DB call.
     The user row is fetched by id; if it disappears between requests (e.g.
     account deleted), the session is cleared and the user is redirected.
-    Stats, transactions, and categories are computed in pure Python from
-    `get_user_expenses(...)` so DB logic stays in `database/db.py`.
+
+    Optional `?from=YYYY-MM-DD` and `?to=YYYY-MM-DD` query parameters narrow
+    the transactions table, the stats row, and the spending-by-category
+    table to the inclusive date window `[from, to]`. Either bound is
+    optional (open-ended on that side). Malformed dates are dropped with
+    an inline error; `from > to` swaps the bounds so the query still
+    returns useful data rather than an empty result.
     """
     if not session.get("user_id"):
         return redirect(url_for("login"))
@@ -169,6 +215,72 @@ def profile():
     if user_row is None:
         session.clear()
         return redirect(url_for("login"))
+
+    # Parse + validate the date filter from the query string. Presets
+    # (e.g. `?preset=this_month`) auto-fill the from/to bounds; explicit
+    # `?from=` / `?to=` win if supplied alongside `?preset=` so a manual
+    # edit always overrides a previously-clicked pill.
+    preset_id = request.args.get("preset", "").strip()
+    from_raw = request.args.get("from", "").strip()
+    to_raw = request.args.get("to", "").strip()
+    filter_error = None
+    active_preset = None
+
+    today = _today()
+    preset_bounds = {
+        "this_month":    (today.replace(day=1).isoformat(), today.isoformat()),
+        "last_3_months": (_add_months(today, -3).isoformat(), today.isoformat()),
+        "last_6_months": (_add_months(today, -6).isoformat(), today.isoformat()),
+    }
+
+    # Preset wins when no explicit dates were typed. Once the user types
+    # in the date inputs, the active preset is cleared so the pill row
+    # no longer highlights a preset (matches the AskUserQuestion answer).
+    # "all_time" is also the implicit default when no params are present.
+    if not from_raw and not to_raw:
+        if preset_id in preset_bounds:
+            from_raw, to_raw = preset_bounds[preset_id]
+            active_preset = preset_id
+        elif preset_id == "" or preset_id == "all_time":
+            active_preset = "all_time"
+
+    from_bound = None
+    to_bound = None
+    # Display-only echoes of the bound back into the <input value="…">.
+    # Empty when the user typed garbage so the bad string isn't round-tripped
+    # into the rendered HTML — the spec is explicit that invalid values are
+    # "ignored". The DB-side `from_bound` / `to_bound` still reflect the
+    # validated values (or `None` for invalid / empty inputs).
+    from_display = ""
+    to_display = ""
+    if from_raw:
+        if DATE_RE.fullmatch(from_raw):
+            from_bound = from_raw
+            from_display = from_raw
+        else:
+            filter_error = "Please enter valid dates (YYYY-MM-DD)."
+    if to_raw:
+        if DATE_RE.fullmatch(to_raw):
+            to_bound = to_raw
+            to_display = to_raw
+        else:
+            filter_error = "Please enter valid dates (YYYY-MM-DD)."
+
+    # Swap when from > to so the query returns useful data instead of nothing.
+    # The status line will surface the swap so the user sees what happened.
+    if from_bound and to_bound and from_bound > to_bound:
+        from_bound, to_bound = to_bound, from_bound
+        from_display, to_display = to_display, from_display
+        filter_error = "From date cannot be after To date."
+
+    filter = {
+        "from": from_display,
+        "to": to_display,
+        # "All Time" is the unfiltered default — keep `is_active` False so
+        # the status line reads "Showing all N transactions" without the
+        # "from X to Y" wording.
+        "is_active": bool((from_display or to_display) and active_preset != "all_time"),
+    }
 
     # User info card -------------------------------------------------------
     name = user_row["name"]
@@ -183,7 +295,9 @@ def profile():
     }
 
     # Stats row ------------------------------------------------------------
-    user_stats = get_user_stats(session["user_id"])
+    user_stats = get_user_stats(
+        session["user_id"], date_from=from_bound, date_to=to_bound
+    )
     if user_stats["top_category"] is None:
         top_category_label = "—"
         top_category_meta = "—"
@@ -197,29 +311,21 @@ def profile():
         {"label": "Top category", "value": top_category_label,            "meta": top_category_meta},
     ]
 
-    # Transactions table — newest first, with running cumulative balance.
-    # Balance = sum of this row's amount and every row that came before it
-    # on the page (i.e. older rows). The top (newest) row always equals
-    # the grand total, matching the "Total spent" stat above.
-    expense_rows = get_user_expenses(session["user_id"])
+    # Transactions list — newest first, mapped from the filtered expense rows.
+    expense_rows = get_user_expenses(
+        session["user_id"], date_from=from_bound, date_to=to_bound
+    )
+    filtered_count = len(expense_rows)
     grand_total = user_stats["total"]
 
     transactions = []
-    # Walk oldest -> newest to accumulate, then re-apply in display order.
-    cumulative = [0.0] * len(expense_rows)
-    running = 0.0
-    for i in range(len(expense_rows) - 1, -1, -1):
-        running += float(expense_rows[i]["amount"])
-        cumulative[i] = running
-
-    for row, acc in zip(expense_rows, cumulative):
+    for row in expense_rows:
         transactions.append({
             "date": row["date"],
             "description": row["description"] or "",
             "category": row["category"],
             "category_class": row["category"].lower(),
             "amount": f"₹{row['amount']:,.2f}",
-            "balance": f"₹{acc:,.2f}",
         })
 
     # Categories table — high -> low by total, with count and percentage.
@@ -253,6 +359,11 @@ def profile():
         stats=stats,
         transactions=transactions,
         categories=categories,
+        filter=filter,
+        filtered_count=filtered_count,
+        filter_error=filter_error,
+        presets=PRESETS,
+        active_preset=active_preset,
     )
 
 
