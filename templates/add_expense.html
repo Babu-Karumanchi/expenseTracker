@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}Add an expense — Spendly{% endblock %}
+
+{% block content %}
+<section class="profile-section">
+    <div class="profile-header">
+        <h1 class="profile-title">Add an expense</h1>
+        <p class="profile-subtitle">Track every rupee. Record a new spend in under 10 seconds.</p>
+    </div>
+
+    <p class="add-expense-back"><a href="{{ url_for('profile') }}">← Back to profile</a></p>
+
+    <div class="profile-card add-expense-card">
+        {% if error %}
+            <div class="form-error" role="alert">{{ error }}</div>
+        {% endif %}
+
+        <form method="post" action="{{ url_for('add_expense') }}" class="add-expense-form" novalidate>
+
+            <div class="form-group">
+                <label for="amount" class="form-field-label">Amount <span class="add-expense-prefix">₹</span></label>
+                <input
+                    type="number"
+                    name="amount"
+                    id="amount"
+                    step="0.01"
+                    min="0.01"
+                    max="1000000"
+                    required
+                    value="{{ amount or '' }}"
+                    class="form-input"
+                    placeholder="0.00"
+                >
+                <p class="add-expense-hint">In Indian rupees. Up to ₹10,00,000.</p>
+            </div>
+
+            <div class="form-group">
+                <label for="category" class="form-field-label">Category</label>
+                <select
+                    name="category"
+                    id="category"
+                    required
+                    class="form-input"
+                >
+                    <option value="" disabled selected>Select a category</option>
+                    {% for c in CATEGORIES %}
+                        <option value="{{ c }}"{% if c == category %} selected{% endif %}>{{ c }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="date" class="form-field-label">Date</label>
+                <input
+                    type="date"
+                    name="date"
+                    id="date"
+                    required
+                    value="{{ date or today }}"
+                    max="{{ today }}"
+                    class="form-input"
+                >
+            </div>
+
+            <div class="form-group">
+                <label for="description" class="form-field-label">Description</label>
+                <textarea
+                    name="description"
+                    id="description"
+                    maxlength="200"
+                    rows="2"
+                    placeholder="Optional. e.g. Lunch at office canteen"
+                    class="form-input"
+                >{{ description or '' }}</textarea>
+                <p class="add-expense-hint">Up to 200 characters.</p>
+            </div>
+
+            <div class="add-expense-form-actions">
+                <button type="submit" class="btn-submit">Save expense</button>
+                <a class="btn-ghost" href="{{ url_for('profile') }}">Cancel</a>
+            </div>
+
+            <p class="add-expense-required">* Required</p>
+        </form>
+    </div>
+</section>
+{% endblock %}

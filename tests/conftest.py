@@ -73,6 +73,26 @@ def _login(client, email, password):
     return resp
 
 
+def body_of(resp):
+    """Convenience: pull `resp.data` once so each test reads cleanly."""
+    return resp.data
+
+
+def demo_id():
+    """The seeded demo user's id.
+
+    Uses the live `_db` module (post-conftest swap) so it points at the
+    same per-test temp DB that the rest of the suite is exercising.
+    """
+    conn = _db.get_db()
+    try:
+        return conn.execute(
+            "SELECT id FROM users WHERE email = ?", ("demo@spendly.com",)
+        ).fetchone()["id"]
+    finally:
+        conn.close()
+
+
 @pytest.fixture
 def seeded_user():
     """A fresh user with 3 expenses spread across 3 dates for filter tests.

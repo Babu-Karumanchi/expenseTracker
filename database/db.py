@@ -7,6 +7,23 @@ from werkzeug.security import check_password_hash, generate_password_hash
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = PROJECT_ROOT / "spendly.db"
 
+# Fixed category vocabulary. Reused by the add-expense route (validation
+# whitelist) and the add-expense template (rendered as <option>s in the
+# select). Keep this list in lock-step with the seed below — adding a
+# category here without seeding it leaves the new word unreachable in
+# real data, and seeding without listing it here leaves it unreachable
+# in the UI.
+CATEGORIES = [
+    "Food",
+    "Transport",
+    "Bills",
+    "Health",
+    "Entertainment",
+    "Shopping",
+    "Other",
+]
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,6 +118,29 @@ def create_user(name, email, password):
         cur = conn.execute(
             "INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)",
             (name, email, password_hash),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def create_expense(user_id, amount, category, date, description):
+    """Insert a new expense for a user. Returns the new expense id.
+
+    An empty/whitespace-only `description` is stored as NULL so the column's
+    NULL semantics are preserved (Step 1 schema marks it nullable, not
+    empty-string). The `created_at` column has `DEFAULT (datetime('now'))`,
+    so it is intentionally not supplied here. Foreign-key enforcement is
+    on (get_db), so inserting with an invalid `user_id` fails cleanly via
+    sqlite3.IntegrityError.
+    """
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "INSERT INTO expenses (user_id, amount, category, date, description) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, amount, category, date, description or None),
         )
         conn.commit()
         return cur.lastrowid
