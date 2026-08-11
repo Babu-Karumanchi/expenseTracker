@@ -16,7 +16,10 @@
                 <span class="profile-member-since">Member since {{ user.member_since }}</span>
             </div>
         </div>
-        <button type="button" class="btn-ghost" disabled title="Edit profile — coming in Step 5">Edit profile</button>
+        <div class="profile-info-actions">
+            <a href="{{ url_for('add_expense') }}" class="btn-primary">+ Add expense</a>
+            <button type="button" class="btn-ghost" disabled title="Edit profile — coming in Step 5">Edit profile</button>
+        </div>
     </div>
 
     {# 2. Summary stats row — total spent / transactions / top category #}
