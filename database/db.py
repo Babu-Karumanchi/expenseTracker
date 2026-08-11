@@ -241,3 +241,60 @@ def get_user_stats(user_id, date_from=None, date_to=None):
         }
     finally:
         conn.close()
+
+
+def get_expense_by_id(expense_id, user_id):
+    """Fetch a single expense row by id, owner-scoped. Returns None if not found.
+
+    Scopes the query with `AND user_id = ?` so the row is only returned when
+    BOTH the id exists AND it belongs to `user_id`. A miss covers both
+    "doesn't exist" and "belongs to a different user" so the caller can
+    `abort(404)` uniformly without leaking which ids are in use.
+
+    Returns a `sqlite3.Row` keyed by column name so the route can index by
+    `expense["amount"]`, `expense["date"]`, etc.
+    """
+    conn = get_db()
+    try:
+        return conn.execute(
+            "SELECT id, user_id, amount, category, date, description "
+            "FROM expenses "
+            "WHERE id = ? AND user_id = ?",
+            (expense_id, user_id),
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def update_expense(expense_id, user_id, amount, category, date, description):
+    """Update an existing expense row, owner-scoped. Returns rowcount.
+
+    Parameterised UPDATE; the `AND user_id = ?` clause means an attempt to
+    update another user's row silently affects 0 rows rather than raising.
+    Empty / whitespace-only `description` is stored as `NULL` — same
+    convention as `create_expense` so the `/profile` transactions cell can
+    render NULL and "" uniformly via `description or ""`.
+
+    `amount` is stored as the value passed in. The route casts the
+    validated `Decimal` to `float` so the column type matches what
+    `create_expense` writes; `SUM(amount)` on /profile then aggregates
+    consistently across original and edited rows.
+
+    `created_at` is intentionally NOT touched — the timestamp records
+    when the row was first recorded, not when it was last corrected.
+
+    The rowcount return value exists for testability (the suite asserts
+    on it); route callers may safely ignore it.
+    """
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "UPDATE expenses "
+            "SET amount = ?, category = ?, date = ?, description = ? "
+            "WHERE id = ? AND user_id = ?",
+            (amount, category, date, description or None, expense_id, user_id),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()

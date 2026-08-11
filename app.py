@@ -4,7 +4,7 @@ import sqlite3
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
-from flask import Flask, render_template, request, redirect, url_for, session
+from flask import Flask, render_template, request, redirect, url_for, session, abort
 
 from database.db import (
     get_db,
@@ -16,6 +16,8 @@ from database.db import (
     get_user_by_id,
     get_user_expenses,
     get_user_stats,
+    get_expense_by_id,
+    update_expense,
     verify_password,
 )
 
@@ -346,6 +348,7 @@ def profile():
     transactions = []
     for row in expense_rows:
         transactions.append({
+            "id": row["id"],
             "date": row["date"],
             "description": row["description"] or "",
             "category": row["category"],
@@ -549,9 +552,160 @@ def _render_add_expense_error(error, today, amount, category, date_str, descript
     )
 
 
-@app.route("/expenses/<int:id>/edit")
+@app.route("/expenses/<int:id>/edit", methods=["GET", "POST"])
 def edit_expense(id):
-    return "Edit expense — coming in Step 8"
+    """Render and process the edit-expense form for the signed-in user.
+
+    Auth guard: an empty session redirects to /login for both GET and POST
+    before any rendering or DB call. The route never accepts `user_id`
+    from the form — that value is always taken from `session["user_id"]`.
+
+    Ownership guard: `get_expense_by_id(id, session_user_id)` scopes the
+    SELECT with `AND user_id = ?`. A miss covers both "doesn't exist" and
+    "belongs to a different user", and the route `abort(404)`s uniformly
+    so an attacker probing ids cannot distinguish the two cases by status
+    code. The same guard fires for POST before validation runs, so a
+    cross-user POST returns 404 without touching the row.
+
+    GET pre-populates the form from the row's current values (amount,
+    category, date, description) and sets the date input's `max` to
+    today. POST validates in the same fixed order as `/expenses/add`,
+    returning the form with the user's typed values echoed back on the
+    first failure:
+        1. amount — must parse as a finite Decimal, >= AMOUNT_MIN, <= AMOUNT_MAX.
+        2. category — must be in CATEGORIES after stripping.
+        3. date — must match DATE_RE, parse via date.fromisoformat(), and not be future.
+        4. description — len <= 200 after stripping.
+
+    On success the row is updated via `update_expense(...)` (empty
+    description stored as NULL) and the user is redirected (HTTP 302)
+    to `/profile` so a refresh resubmits the GET there, not the POST.
+    """
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    expense = get_expense_by_id(id, session["user_id"])
+    if expense is None:
+        abort(404)
+
+    today = _today().isoformat()
+
+    if request.method == "GET":
+        # Pre-populate from the row. `amount` is rendered as the raw float
+        # `str()` cast so the input shows what the DB stored (e.g. "450.0",
+        # not a re-formatted rupee string). `description` falls back to ""
+        # when the column is NULL so the textarea is visibly blank.
+        return render_template(
+            "edit_expense.html",
+            expense=expense,
+            today=today,
+            amount=str(expense["amount"]),
+            category=expense["category"],
+            date=expense["date"],
+            description=expense["description"] or "",
+            CATEGORIES=CATEGORIES,
+        )
+
+    # POST — read raw form values. Strip whitespace on category /
+    # description (free text); leave amount / date raw (mechanical).
+    amount_raw = request.form.get("amount") or ""
+    category = (request.form.get("category") or "").strip()
+    date_raw = request.form.get("date") or ""
+    description = (request.form.get("description") or "").strip()
+
+    # 1. amount
+    if amount_raw == "":
+        return _render_edit_expense_error(
+            "Please enter an amount.",
+            expense, today, amount_raw, category, date_raw, description,
+        )
+    try:
+        amount_decimal = Decimal(amount_raw)
+    except (InvalidOperation, ValueError):
+        return _render_edit_expense_error(
+            AMOUNT_RANGE_ERROR,
+            expense, today, amount_raw, category, date_raw, description,
+        )
+    # `is_finite()` rejects NaN / sNaN (Decimal comparisons with NaN are
+    # always False). The lower bound is AMOUNT_MIN, not 0, so sub-paise
+    # values like 0.001 don't pass and round to "₹0.00" on /profile.
+    if (
+        not amount_decimal.is_finite()
+        or amount_decimal < AMOUNT_MIN
+        or amount_decimal > AMOUNT_MAX
+    ):
+        return _render_edit_expense_error(
+            AMOUNT_RANGE_ERROR,
+            expense, today, amount_raw, category, date_raw, description,
+        )
+
+    # 2. category
+    if category not in CATEGORIES:
+        return _render_edit_expense_error(
+            "Please choose a category.",
+            expense, today, amount_raw, category, date_raw, description,
+        )
+
+    # 3. date
+    if not DATE_RE.fullmatch(date_raw):
+        return _render_edit_expense_error(
+            "Please enter a valid date.",
+            expense, today, amount_raw, category, date_raw, description,
+        )
+    try:
+        parsed_date = date.fromisoformat(date_raw)
+    except ValueError:
+        return _render_edit_expense_error(
+            "Please enter a valid date.",
+            expense, today, amount_raw, category, date_raw, description,
+        )
+    if parsed_date > _today():
+        return _render_edit_expense_error(
+            "Date cannot be in the future.",
+            expense, today, amount_raw, category, date_raw, description,
+        )
+
+    # 4. description
+    if len(description) > 200:
+        return _render_edit_expense_error(
+            "Description must be 200 characters or fewer.",
+            expense, today, amount_raw, category, date_raw, description,
+        )
+
+    # Success — persist then redirect (POST-Redirect-GET).
+    # Empty description is stored as NULL by `update_expense` itself,
+    # so the route passes the user-typed string through unchanged.
+    update_expense(
+        id,
+        session["user_id"],
+        float(amount_decimal),
+        category,
+        parsed_date.isoformat(),
+        description,
+    )
+    return redirect(url_for("profile"))
+
+
+def _render_edit_expense_error(error, expense, today, amount, category, date_str, description):
+    """Re-render edit_expense.html with `error` and the typed values echoed.
+
+    Helper for the POST validation branches so each failure path stays a
+    single readable line. `expense` is passed through so the template can
+    render the row's id / original context (e.g. back link) when
+    validation fails. The signature differs from `_render_add_expense_error`
+    by the leading `expense` arg — the only intentional change.
+    """
+    return render_template(
+        "edit_expense.html",
+        error=error,
+        expense=expense,
+        today=today,
+        amount=amount,
+        category=category,
+        date=date_str,
+        description=description,
+        CATEGORIES=CATEGORIES,
+    )
 
 
 @app.route("/expenses/<int:id>/delete")
