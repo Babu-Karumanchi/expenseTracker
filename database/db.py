@@ -5,7 +5,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 # database/db.py → spendly/ → repo root
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DB_PATH = PROJECT_ROOT / "expense_tracker.db"
+DB_PATH = PROJECT_ROOT / "spendly.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (

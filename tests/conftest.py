@@ -16,7 +16,7 @@ import app as _app_module  # noqa: E402  (must follow the DB_PATH swap)
 
 
 flask_app = _app_module.app
-# Use a per-test temp DB so we never touch the dev expense_tracker.db.
+# Use a per-test temp DB so we never touch the dev spendly.db.
 _TEST_DB_PATH = None
 
 
