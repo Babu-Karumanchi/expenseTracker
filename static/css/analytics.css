@@ -1,0 +1,56 @@
+/* Analytics coming-soon page — page-specific styles.
+   Reuses tokens from style.css :root for color/type/radius. */
+
+.analytics-section {
+    max-width: 560px;
+    margin: 0 auto;
+    padding: 4rem 2rem 5rem;
+    min-height: calc(100vh - 60px - 100px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+
+.analytics-badge {
+    display: inline-block;
+    padding: 0.35rem 0.9rem;
+    margin-bottom: 1.5rem;
+    background: var(--accent-light);
+    color: var(--accent);
+    border-radius: 999px;
+    font-family: var(--font-body);
+    font-size: 0.8rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+}
+
+.analytics-title {
+    font-family: var(--font-display);
+    font-size: clamp(1.75rem, 3vw, 2.5rem);
+    color: var(--ink);
+    letter-spacing: -0.02em;
+    margin: 0 0 1rem;
+    line-height: 1.15;
+}
+
+.analytics-subtitle {
+    color: var(--ink-muted);
+    font-size: 1.05rem;
+    line-height: 1.6;
+    margin: 0 0 0.5rem;
+    max-width: 440px;
+}
+
+.analytics-meta {
+    color: var(--ink-faint);
+    font-size: 0.9rem;
+    margin: 0;
+}
+
+@media (max-width: 600px) {
+    .analytics-section {
+        padding: 2rem 1.25rem 3rem;
+    }
+}

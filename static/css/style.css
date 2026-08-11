@@ -103,6 +103,21 @@ a { color: inherit; text-decoration: none; }
 .nav-links a { color: var(--ink-muted); transition: color 0.2s; }
 .nav-links a:hover { color: var(--ink); }
 
+/* Main-nav links (e.g. Analytics) — distinct from auth links so the
+   active-state styling does not bleed into greeting / sign-out / CTA. */
+.nav-link { color: var(--ink-muted); transition: color 0.2s; }
+.nav-link:hover { color: var(--ink); }
+.nav-link--active { color: var(--ink); font-weight: 500; }
+.nav-link--active::after {
+    content: "";
+    display: block;
+    height: 2px;
+    width: 100%;
+    margin-top: 4px;
+    background: var(--accent);
+    border-radius: 1px;
+}
+
 .nav-greeting {
     color: var(--ink-muted);
     margin-right: 0.75rem;
