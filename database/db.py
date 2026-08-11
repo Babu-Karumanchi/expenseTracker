@@ -108,6 +108,29 @@ def create_user(name, email, password):
         conn.close()
 
 
+def create_expense(user_id, amount, category, date, description):
+    """Insert a new expense for a user. Returns the new expense id.
+
+    An empty/whitespace-only `description` is stored as NULL so the column's
+    NULL semantics are preserved (Step 1 schema marks it nullable, not
+    empty-string). The `created_at` column has `DEFAULT (datetime('now'))`,
+    so it is intentionally not supplied here. Foreign-key enforcement is
+    on (get_db), so inserting with an invalid `user_id` fails cleanly via
+    sqlite3.IntegrityError.
+    """
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "INSERT INTO expenses (user_id, amount, category, date, description) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, amount, category, date, description or None),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
 def get_user_by_email(email):
     """Fetch a user row by email. Returns None if not found."""
     conn = get_db()

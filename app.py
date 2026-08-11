@@ -2,6 +2,7 @@ import os
 import re
 import sqlite3
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 
 from flask import Flask, render_template, request, redirect, url_for, session
 
@@ -10,6 +11,7 @@ from database.db import (
     init_db,
     seed_db,
     create_user,
+    create_expense,
     get_user_by_email,
     get_user_by_id,
     get_user_expenses,
@@ -22,6 +24,29 @@ app.secret_key = os.environ.get("SPENDLY_SECRET_KEY") or "dev-only-not-for-produ
 
 # Module-level regexes — compiled once, reused on every request.
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Fixed category vocabulary seeded in Step 1. Reused by the add-expense
+# route (validation whitelist) and the add-expense template (rendered as
+# <option>s in the select). Keep this list in lock-step with the seed.
+CATEGORIES = [
+    "Food",
+    "Transport",
+    "Bills",
+    "Health",
+    "Entertainment",
+    "Shopping",
+    "Other",
+]
+
+# Inclusive amount bounds (in INR) — encoded as Decimal so the comparison
+# is exact and the format string in the user-facing message is unambiguous.
+AMOUNT_MIN = Decimal("0.01")
+AMOUNT_MAX = Decimal("1000000")
+
+# User-facing amount error. Single source of truth so the message stays
+# consistent across the two amount-validation branches (non-numeric and
+# out-of-range).
+AMOUNT_RANGE_ERROR = "Please enter a valid amount between ₹0.01 and ₹10,00,000."
 
 
 def _today():
@@ -377,9 +402,151 @@ def analytics():
     return render_template("analytics.html")
 
 
-@app.route("/expenses/add")
+@app.route("/expenses/add", methods=["GET", "POST"])
 def add_expense():
-    return "Add expense — coming in Step 7"
+    """Render and process the add-expense form for the signed-in user.
+
+    Auth guard: an empty session redirects to /login for both GET and POST
+    before any rendering or DB call. The route never accepts `user_id`
+    from the form — that value is always taken from `session["user_id"]`.
+
+    GET pre-fills the `date` field with today's ISO date (`YYYY-MM-DD`)
+    so the user can submit the common "I just spent it" case without
+    touching the date picker. The `max="{{ today }}"` attribute on the
+    date input is a UX hint; the server still rejects future dates.
+
+    POST validates in this fixed order, returning the form with the
+    user's typed values echoed back on the first failure:
+        1. amount — must be a parseable Decimal, > 0, <= 1,000,000.
+           Empty → "Please enter an amount."; otherwise
+           "Please enter a valid amount between ₹0.01 and ₹10,00,000."
+        2. category — must be in CATEGORIES after stripping.
+           "Please choose a category."
+        3. date — must match DATE_RE AND parse via date.fromisoformat()
+           AND not be in the future.
+           Bad format → "Please enter a valid date.";
+           future date → "Date cannot be in the future."
+        4. description — len <= 200 after stripping.
+           "Description must be 200 characters or fewer."
+
+    On success the row is inserted via `create_expense(...)` (empty
+    description stored as NULL) and the user is redirected (HTTP 302)
+    to `/profile` so a refresh resubmits the GET there, not the POST.
+    """
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    today = _today().isoformat()
+
+    if request.method == "GET":
+        return render_template(
+            "add_expense.html",
+            today=today,
+            amount="",
+            category="",
+            date=today,
+            description="",
+            CATEGORIES=CATEGORIES,
+        )
+
+    # POST — read raw form values. Strip whitespace on category /
+    # description (free text); leave amount / date raw (mechanical).
+    amount_raw = request.form.get("amount") or ""
+    category = (request.form.get("category") or "").strip()
+    date_raw = request.form.get("date") or ""
+    description = (request.form.get("description") or "").strip()
+
+    # 1. amount
+    if amount_raw == "":
+        return _render_add_expense_error(
+            "Please enter an amount.",
+            today, amount_raw, category, date_raw, description,
+        )
+    try:
+        amount_decimal = Decimal(amount_raw)
+    except (InvalidOperation, ValueError):
+        return _render_add_expense_error(
+            AMOUNT_RANGE_ERROR,
+            today, amount_raw, category, date_raw, description,
+        )
+    # `is_finite()` rejects NaN / sNaN (Decimal comparisons with NaN are
+    # always False, so a plain `<= 0` / `> AMOUNT_MAX` would let NaN slip
+    # through and break SUM(amount) on /profile). The lower bound is
+    # AMOUNT_MIN (₹0.01), not 0, so sub-paise values like 0.001 don't
+    # pass and round to "₹0.00" on the profile page.
+    if (
+        not amount_decimal.is_finite()
+        or amount_decimal < AMOUNT_MIN
+        or amount_decimal > AMOUNT_MAX
+    ):
+        return _render_add_expense_error(
+            AMOUNT_RANGE_ERROR,
+            today, amount_raw, category, date_raw, description,
+        )
+
+    # 2. category
+    if category not in CATEGORIES:
+        return _render_add_expense_error(
+            "Please choose a category.",
+            today, amount_raw, category, date_raw, description,
+        )
+
+    # 3. date
+    if not DATE_RE.fullmatch(date_raw):
+        return _render_add_expense_error(
+            "Please enter a valid date.",
+            today, amount_raw, category, date_raw, description,
+        )
+    try:
+        parsed_date = date.fromisoformat(date_raw)
+    except ValueError:
+        return _render_add_expense_error(
+            "Please enter a valid date.",
+            today, amount_raw, category, date_raw, description,
+        )
+    if parsed_date > _today():
+        return _render_add_expense_error(
+            "Date cannot be in the future.",
+            today, amount_raw, category, date_raw, description,
+        )
+
+    # 4. description
+    if len(description) > 200:
+        return _render_add_expense_error(
+            "Description must be 200 characters or fewer.",
+            today, amount_raw, category, date_raw, description,
+        )
+
+    # Success — persist then redirect (POST-Redirect-GET).
+    # Empty description is stored as NULL by `create_expense` itself, so
+    # the route passes the user-typed string through unchanged.
+    create_expense(
+        session["user_id"],
+        float(amount_decimal),
+        category,
+        parsed_date.isoformat(),
+        description,
+    )
+    return redirect(url_for("profile"))
+
+
+def _render_add_expense_error(error, today, amount, category, date_str, description):
+    """Re-render add_expense.html with `error` and the typed values echoed.
+
+    Helper for the POST validation branches so each failure path stays a
+    single readable line. The `today` kwarg keeps the date input's
+    `max="..."` attribute correct on re-render.
+    """
+    return render_template(
+        "add_expense.html",
+        error=error,
+        today=today,
+        amount=amount,
+        category=category,
+        date=date_str,
+        description=description,
+        CATEGORIES=CATEGORIES,
+    )
 
 
 @app.route("/expenses/<int:id>/edit")
