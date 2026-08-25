@@ -9,7 +9,7 @@ import re
 
 import pytest
 
-from tests.conftest import _login, make_expense, make_user
+from tests.conftest import _login, body_of, make_expense, make_user
 
 
 # Currency cells must match this exact shape — Indian formatting via the
@@ -97,8 +97,9 @@ def test_profile_empty_user_renders_cleanly(client):
     assert b"\xe2\x82\xb90.00" in body  # ₹0.00
     # The em-dash placeholder for the top-category stat
     assert b"\xe2\x80\x94" in body  # —
-    # Transactions stat should be 0
-    assert b"<span class=\"profile-stat-value\">0</span>" in body
+    # Transactions stat should be 0 (the count span now carries an id so
+    # the modal JS handler can update it in place after add/delete).
+    assert b'<span id="profile-txn-count" class="profile-stat-value">0</span>' in body
 
 
 def test_profile_inr_formatting(client):
@@ -311,3 +312,135 @@ def test_manual_date_edit_clears_active_preset(client, seeded_user):
     assert resp.status_code == 200
     body = resp.data.decode("utf-8")
     assert "profile-pill--active" not in body
+
+
+# ------------------------------------------------------------------ #
+# Add expense modal — inline form modal for the + Add expense CTA.   #
+# ------------------------------------------------------------------ #
+
+def test_profile_renders_add_expense_modal(client):
+    """The + Add expense CTA on /profile opens a styled modal containing
+    a real form (no navigation). Verified by finding the modal block,
+    the trigger, the heading, the form, and the Cancel button.
+    """
+    _login(client, "demo@spendly.com", "demo123")
+    body = body_of(client.get("/profile"))
+
+    # The CTA on the user-info card carries the trigger.
+    assert b'data-open-modal="add-expense-modal"' in body
+
+    # The modal div is present, hidden by default, with the right a11y attributes.
+    modal_match = re.search(
+        rb'<div\s+id="add-expense-modal"[^>]*>(.*?)</div>\s*</div>\s*</div>',
+        body,
+        re.DOTALL,
+    )
+    assert modal_match is not None, "add-expense-modal block not found"
+    modal_html = modal_match.group(1)
+
+    # Heading
+    assert b"Add expense" in modal_html
+
+    # Real form, posting to /expenses/add, marked for AJAX submission.
+    form_match = re.search(
+        rb'<form\b[^>]*action="/expenses/add"[^>]*data-ajax-form',
+        modal_html,
+    )
+    assert form_match is not None, "add-expense-modal missing POST form with data-ajax-form"
+    form_html = form_match.group(0)
+
+    # Four inputs by name.
+    for name in (b'amount', b'category', b'date', b'description'):
+        assert (b'name="' + name + b'"') in modal_html, (
+            f"add-expense-modal missing input name={name!r}"
+        )
+
+    # Submit button labelled "Save expense".
+    assert re.search(
+        rb'<button[^>]*type="submit"[^>]*>\s*Save expense\s*</button>',
+        modal_html,
+    ) is not None, "add-expense-modal missing 'Save expense' submit button"
+
+    # Cancel button (closes only, does NOT submit the form).
+    assert re.search(
+        rb'<button[^>]*data-close-modal(?![a-z\-])[^>]*>\s*Cancel\s*</button>',
+        modal_html,
+    ) is not None, "add-expense-modal missing Cancel button"
+
+
+def test_profile_edit_modal_contains_form_pre_populated_from_row(client):
+    """Each row's edit modal on /profile contains a real <form method=post
+    action=/expenses/<id>/edit data-ajax-form> pre-populated from the
+    row's current values. Submitting via fetch updates the row in place.
+    """
+    _login(client, "demo@spendly.com", "demo123")
+    body = body_of(client.get("/profile"))
+
+    # Find the FIRST edit-modal block (the seeded demo user has at least
+    # one row, so the loop renders at least one block).
+    modal_match = re.search(
+        rb'<div\s+id="edit-modal-(\d+)"[^>]*>(.*?)</div>\s*</div>\s*</div>',
+        body,
+        re.DOTALL,
+    )
+    assert modal_match is not None, "no edit-modal-<id> block found on /profile"
+    eid = modal_match.group(1)
+    modal_html = modal_match.group(2)
+
+    # Form posts to /expenses/<id>/edit with data-ajax-form.
+    expected_action = b'/expenses/' + eid + b'/edit'
+    form_match = re.search(
+        rb'<form\b[^>]*action="' + re.escape(expected_action) + rb'"[^>]*data-ajax-form',
+        modal_html,
+    )
+    assert form_match is not None, (
+        f"edit-modal-{eid.decode()} missing POST form with action "
+        f"{expected_action!r} and data-ajax-form"
+    )
+
+    # Four inputs by name.
+    for name in (b'amount', b'category', b'date', b'description'):
+        assert (b'name="' + name + b'"') in modal_html, (
+            f"edit-modal-{eid.decode()} missing input name={name!r}"
+        )
+
+    # Submit button labelled "Save changes".
+    assert re.search(
+        rb'<button[^>]*type="submit"[^>]*>\s*Save changes\s*</button>',
+        modal_html,
+    ) is not None, f"edit-modal-{eid.decode()} missing 'Save changes' submit button"
+
+    # Cancel button (closes only).
+    assert re.search(
+        rb'<button[^>]*data-close-modal(?![a-z\-])[^>]*>\s*Cancel\s*</button>',
+        modal_html,
+    ) is not None, f"edit-modal-{eid.decode()} missing Cancel button"
+
+
+def test_profile_delete_modal_contains_form_with_ajax_submit_button(client):
+    """Each row's delete modal on /profile contains a <form data-ajax-form>
+    whose submit button carries data-ajax-submit (replaces the old
+    data-close-modal-and-submit attribute). Cancel button stays as a
+    pure data-close-modal marker.
+    """
+    _login(client, "demo@spendly.com", "demo123")
+    body = body_of(client.get("/profile"))
+
+    # Each delete modal must have at least one Cancel button (data-close-modal,
+    # NOT data-ajax-submit).
+    cancel_buttons = re.findall(
+        rb'<button[^>]*data-close-modal(?![a-z\-])[^>]*>\s*Cancel\s*</button>',
+        body,
+    )
+    assert len(cancel_buttons) >= 1, "expected at least one Cancel button on /profile"
+
+    # Each delete modal must contain a Delete submit button carrying
+    # data-ajax-submit AND class btn-danger.
+    delete_buttons = re.findall(
+        rb'<button[^>]*data-ajax-submit[^>]*>',
+        body,
+    )
+    assert len(delete_buttons) >= 1, "expected at least one Delete submit button"
+
+    for btn in delete_buttons:
+        assert b"btn-danger" in btn, f"Delete button missing btn-danger class: {btn!r}"

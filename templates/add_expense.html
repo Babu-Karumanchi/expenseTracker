@@ -17,6 +17,7 @@
         {% endif %}
 
         <form method="post" action="{{ url_for('add_expense') }}" class="add-expense-form" novalidate>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
             <div class="form-group">
                 <label for="amount" class="form-field-label">Amount <span class="add-expense-prefix">₹</span></label>

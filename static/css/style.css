@@ -785,6 +785,103 @@ a { color: inherit; text-decoration: none; }
     .modal-title { font-size: 1.05rem; }
 }
 
+/* Narrow variant for the confirm / pre-nav modals on /profile (Add,
+   Edit, Delete). The default .modal-window caps at 880px which is too
+   wide for a one-question modal — narrow it to ~440px so the modal
+   reads as a focused question rather than a content surface. */
+.modal-window--narrow {
+    max-width: 440px;
+    padding: 1.75rem 1.75rem 1.5rem;
+}
+
+/* Body paragraph inside a confirm / pre-nav modal. Sits between the
+   title and the action row; the muted ink-soft color keeps the
+   question readable without competing with the title. */
+.modal-body {
+    color: var(--ink-soft);
+    font-size: 0.95rem;
+    line-height: 1.55;
+    margin-bottom: 1.25rem;
+}
+
+/* One-line summary row inside the Delete modal — date · category chip
+   · amount — so the user can verify exactly what they're about to
+   remove before clicking Delete. Sits between .modal-body and
+   .modal-actions. */
+.modal-summary {
+    color: var(--ink-muted);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    padding: 0.75rem 0.9rem;
+    margin-bottom: 1.25rem;
+    background: var(--paper-warm);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.modal-summary strong {
+    color: var(--ink);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    margin-left: auto;
+}
+
+/* Action row at the bottom of a confirm / pre-nav modal. Flex with the
+   primary action on the right and the cancel / dismiss on the left,
+   matching the .add-expense-form-actions pattern already used on the
+   add / edit form pages so the visual rhythm stays consistent. */
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.modal-actions .btn-ghost {
+    text-align: center;
+}
+
+/* The form that wraps the Delete danger button is `display: inline` so
+   the button sits flush with the Cancel ghost button in the
+   .modal-actions row. No margin / padding — the .modal-actions gap
+   handles spacing. */
+.modal-delete-form {
+    display: inline;
+    margin: 0;
+}
+
+/* Wide variant — used by the Add / Edit expense modals which carry the
+   full four-field form (~600px content width). Mirrors the existing
+   .modal-window--narrow at 440px for the Delete confirmation. */
+.modal-window--wide {
+    max-width: 600px;
+    padding: 1.75rem 2rem 1.5rem;
+}
+
+/* Inline error banner inside a modal (Add / Edit / Delete forms). Same
+   colour recipe as .form-error / .auth-error / .profile-filter-status--danger
+   (--danger-light bg + --danger text + soft border). */
+.modal-form-error {
+    background: var(--danger-light);
+    color: var(--danger);
+    border: 1px solid var(--danger-light);
+    padding: 0.75rem 1rem;
+    border-radius: var(--radius-sm);
+    margin-bottom: 1.25rem;
+    font-size: 0.9rem;
+}
+
+.modal-form-error[hidden] { display: none; }
+
+/* The .add-expense-form rules further down already style the form
+   inside a modal — only the top spacing needs a small bump so the
+   primary button doesn't sit flush against the modal body paragraph. */
+.modal-window--wide .add-expense-form-actions { margin-top: 1.5rem; }
+
 /* ------------------------------------------------------------------ */
 /* Profile page                                                        */
 /* ------------------------------------------------------------------ */
@@ -1371,4 +1468,108 @@ a { color: inherit; text-decoration: none; }
 .profile-table-edit-link:hover {
     border-color: var(--ink);
     color: var(--ink);
+}
+
+/* ------------------------------------------------------------------ */
+/* Step 9 — Delete expense                                             */
+/* ------------------------------------------------------------------ */
+
+/* Read-only summary list on the delete confirmation page. Renders the
+   row's date / category / amount / description as a labelled list so
+   the user sees exactly what they're about to remove. `dl` resets the
+   browser's default margin so the summary sits flush against the
+   surrounding card padding. */
+.delete-expense-summary {
+    margin: 0 0 1.5rem 0;
+    padding: 0;
+}
+
+.delete-expense-summary-row {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 1rem;
+    align-items: baseline;
+    padding: 0.6rem 0;
+    border-bottom: 1px solid var(--border-soft);
+}
+
+.delete-expense-summary-row:last-child {
+    border-bottom: none;
+}
+
+.delete-expense-summary-label {
+    margin: 0;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.delete-expense-summary-value {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--ink);
+    word-break: break-word;
+}
+
+.delete-expense-summary-amount {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Primary red submit button — used by the delete confirmation page.
+   Mirrors the `.btn-submit` shape (radius, padding, font) but uses the
+   --danger palette so the destructive verb reads as destructive. Hover
+   dims slightly via opacity so the user gets the same press-feedback
+   cue as the other primary buttons. */
+.btn-danger {
+    display: inline-block;
+    background: var(--danger);
+    color: var(--paper-card);
+    padding: 0.65rem 1.5rem;
+    border-radius: 999px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    border: 1px solid var(--danger);
+    cursor: pointer;
+    transition: opacity 0.2s;
+    text-decoration: none;
+}
+
+.btn-danger:hover {
+    opacity: 0.9;
+}
+
+/* The confirmation form is inline-block so it sits in the
+   .add-expense-form-actions flex row alongside the .btn-ghost Cancel
+   link without a stray line break. */
+.delete-expense-confirm-form {
+    display: inline-block;
+}
+
+/* Pill-shaped ghost link for the per-row Delete action. Same recipe as
+   .profile-table-edit-link but tinted with the --danger palette so the
+   destructive verb reads as destructive. A small left margin keeps the
+   two links visually separated inside the trailing actions cell. Hover
+   inverts to a filled --danger surface so the affordance matches the
+   "this is destructive" framing of the button on the confirmation page. */
+.profile-table-delete-link {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0.3rem 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--danger);
+    background: transparent;
+    text-decoration: none;
+    transition: border-color 0.2s, color 0.2s, background 0.2s;
+}
+
+.profile-table-delete-link:hover {
+    border-color: var(--danger);
+    color: var(--paper-card);
+    background: var(--danger);
 }

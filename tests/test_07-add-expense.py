@@ -28,6 +28,7 @@ from tests.conftest import (
     _db,
     _login,
     body_of,
+    csrf_token_of,
     demo_id,
     make_expense,
     make_user,
@@ -683,3 +684,207 @@ def test_post_returns_200_not_redirect_on_validation_error(client):
     )
     # Status is 200, NOT 302. A 302 here would skip re-rendering the form.
     assert resp.status_code == 200
+
+
+# ------------------------------------------------------------------ #
+# AJAX shape (X-Requested-With: XMLHttpRequest)                       #
+# ------------------------------------------------------------------ #
+#
+# Spec 07: when the Add expense modal on /profile submits via fetch(),
+# the route must return JSON so the JS can render the row in place.
+# AJAX success  -> {"ok": true,  "expense": {id, date, description, category,
+#                                            category_class, amount}}
+# AJAX failure  -> {"ok": false, "error": "...", "values": {amount, category,
+#                                                            date, description}}
+# Direct nav    -> unchanged 302 to /profile (no-JS fallback still works).
+
+import json
+
+
+_AJAX_HEADERS = {"X-Requested-With": "XMLHttpRequest"}
+
+
+def _post_add(client, data, *, ajax=True):
+    headers = _AJAX_HEADERS if ajax else {}
+    # Inject the CSRF token from the session so the route's check
+    # passes. Tests that explicitly want the missing-token 403 path
+    # should call `client.post(..., data=data_without_csrf)` directly.
+    token = csrf_token_of(client)
+    if token is not None:
+        data = {**data, "csrf_token": token}
+    return client.post(
+        "/expenses/add", data=data, follow_redirects=False, headers=headers
+    )
+
+
+def test_post_add_ajax_success_returns_json_with_full_expense_payload(client):
+    """AJAX POST with valid form -> 200 JSON {ok:true, expense:{...}}."""
+    import json as _json
+
+    _login(client, "demo@spendly.com", "demo123")
+    user_id = demo_id()
+    today = _today_iso()
+    before = _count_expenses(user_id)
+
+    resp = _post_add(
+        client,
+        {
+            "amount": "425.75",
+            "category": "Food",
+            "date": today,
+            "description": "Lunch with team",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.headers["Content-Type"].startswith("application/json")
+    payload = _json.loads(resp.data)
+    assert payload["ok"] is True
+    assert "expense" in payload
+    expense = payload["expense"]
+    # Every key the JS handler expects
+    assert set(expense.keys()) == {
+        "id", "date", "description", "category", "category_class", "amount",
+    }
+    assert expense["date"] == today
+    assert expense["description"] == "Lunch with team"
+    assert expense["category"] == "Food"
+    assert expense["category_class"] == "food"
+    assert "₹425.75" in expense["amount"] or expense["amount"] == "₹425.75"
+    # Row landed in DB
+    assert _count_expenses(user_id) == before + 1
+
+
+def test_post_add_ajax_empty_amount_returns_error_and_echoes_values(client):
+    """AJAX POST with empty amount -> {ok:false, error, values} status 200."""
+    _login(client, "demo@spendly.com", "demo123")
+    resp = _post_add(
+        client,
+        {
+            "amount": "",
+            "category": "Food",
+            "date": "2026-08-11",
+            "description": "echo me",
+        },
+    )
+    assert resp.status_code == 200
+    payload = json.loads(resp.data)
+    assert payload["ok"] is False
+    assert payload["error"] == EMPTY_AMOUNT_MSG.decode("utf-8")
+    assert payload["values"]["amount"] == ""
+    assert payload["values"]["category"] == "Food"
+    assert payload["values"]["date"] == "2026-08-11"
+    assert payload["values"]["description"] == "echo me"
+
+
+def test_post_add_ajax_range_error_returns_error_and_echoes_values(client):
+    """AJAX POST with non-numeric amount -> {ok:false, error} with range msg."""
+    _login(client, "demo@spendly.com", "demo123")
+    resp = _post_add(
+        client,
+        {
+            "amount": "abc",
+            "category": "Food",
+            "date": _today_iso(),
+            "description": "",
+        },
+    )
+    assert resp.status_code == 200
+    payload = json.loads(resp.data)
+    assert payload["ok"] is False
+    assert payload["error"] == RANGE_AMOUNT_MSG.decode("utf-8")
+    assert payload["values"]["amount"] == "abc"
+
+
+def test_post_add_ajax_unknown_category_returns_error(client):
+    """AJAX POST with unknown category -> {ok:false, error}."""
+    _login(client, "demo@spendly.com", "demo123")
+    resp = _post_add(
+        client,
+        {
+            "amount": "50.00",
+            "category": "Crypto",
+            "date": _today_iso(),
+            "description": "",
+        },
+    )
+    assert resp.status_code == 200
+    payload = json.loads(resp.data)
+    assert payload["ok"] is False
+    assert payload["error"] == BAD_CATEGORY_MSG.decode("utf-8")
+    assert payload["values"]["category"] == "Crypto"
+
+
+def test_post_add_ajax_future_date_returns_error(client):
+    """AJAX POST with future date -> {ok:false, error} with future-date msg."""
+    _login(client, "demo@spendly.com", "demo123")
+    resp = _post_add(
+        client,
+        {
+            "amount": "50.00",
+            "category": "Food",
+            "date": _tomorrow_iso(),
+            "description": "",
+        },
+    )
+    assert resp.status_code == 200
+    payload = json.loads(resp.data)
+    assert payload["ok"] is False
+    assert payload["error"] == FUTURE_DATE_MSG.decode("utf-8")
+
+
+def test_post_add_ajax_long_description_returns_error(client):
+    """AJAX POST with 201-char description -> {ok:false, error} length msg."""
+    _login(client, "demo@spendly.com", "demo123")
+    resp = _post_add(
+        client,
+        {
+            "amount": "50.00",
+            "category": "Food",
+            "date": _today_iso(),
+            "description": "x" * 201,
+        },
+    )
+    assert resp.status_code == 200
+    payload = json.loads(resp.data)
+    assert payload["ok"] is False
+    assert payload["error"] == LONG_DESC_MSG.decode("utf-8")
+
+
+def test_post_add_without_ajax_header_falls_back_to_html_redirect(client):
+    """Direct nav POST (no X-Requested-With header) keeps the 302 fallback."""
+    _login(client, "demo@spendly.com", "demo123")
+    resp = _post_add(
+        client,
+        {
+            "amount": "50.00",
+            "category": "Food",
+            "date": _today_iso(),
+            "description": "",
+        },
+        ajax=False,
+    )
+    # Same response as before AJAX was introduced — preserves the no-JS path.
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/profile")
+    assert not resp.headers.get("Content-Type", "").startswith("application/json")
+
+
+def test_post_add_ajax_invalidates_dont_insert_rows(client):
+    """An AJAX validation failure must NOT insert a row in the DB."""
+    _login(client, "demo@spendly.com", "demo123")
+    user_id = demo_id()
+    before = _count_expenses(user_id)
+
+    _post_add(
+        client,
+        {
+            "amount": "0",
+            "category": "Food",
+            "date": _today_iso(),
+            "description": "",
+        },
+    )
+    assert _count_expenses(user_id) == before, (
+        "AJAX validation failure must not insert a row"
+    )

@@ -63,7 +63,9 @@ from tests.conftest import (
     _db,
     _login,
     body_of,
+    csrf_token_of,
     demo_id,
+    make_expense,
     make_user,
 )
 
@@ -1045,3 +1047,223 @@ def test_update_expense_with_matching_user_id_affects_one_row_with_new_values(cl
     assert after["date"] == "2026-08-09"
     assert after["description"] == "updated"
     assert after["user_id"] == me
+
+
+# ------------------------------------------------------------------ #
+# AJAX shape (X-Requested-With: XMLHttpRequest)                       #
+# ------------------------------------------------------------------ #
+#
+# Spec 08: when the Edit modal on /profile submits via fetch(), the
+# route must return JSON so the JS can update the row in place.
+# AJAX success  -> {"ok": true,  "expense": {id, date, description,
+#                                            category, category_class,
+#                                            amount}}
+# AJAX failure  -> {"ok": false, "error": "...", "values": {...}}
+# Direct nav    -> unchanged 302 to /profile (no-JS fallback still works).
+
+import json
+
+
+_AJAX_HEADERS = {"X-Requested-With": "XMLHttpRequest"}
+
+
+def _make_own_expense():
+    """Helper: signed-in demo user, plus a known expense id to edit."""
+    me = demo_id()
+    eid = make_expense(me, 200.00, "Food", "2026-08-01", "before edit")
+    return me, eid
+
+
+def _post_edit(client, eid, data, *, ajax=True):
+    headers = _AJAX_HEADERS if ajax else {}
+    # Inject the CSRF token from the session so the route's check
+    # passes. Tests that explicitly want the missing-token 403 path
+    # should call `client.post(..., data=data_without_csrf)` directly.
+    token = csrf_token_of(client)
+    if token is not None:
+        data = {**data, "csrf_token": token}
+    return client.post(
+        f"/expenses/{eid}/edit", data=data, follow_redirects=False,
+        headers=headers,
+    )
+
+
+def test_post_edit_ajax_success_returns_json_with_expense_payload(client):
+    """AJAX POST with valid form -> 200 JSON {ok:true, expense:{...}}."""
+    _login(client, "demo@spendly.com", "demo123")
+    me, eid = _make_own_expense()
+
+    resp = _post_edit(
+        client, eid,
+        {
+            "amount": "250.50",
+            "category": "Transport",
+            "date": "2026-08-05",
+            "description": "after edit",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.headers["Content-Type"].startswith("application/json")
+    payload = json.loads(resp.data)
+    assert payload["ok"] is True
+    expense = payload["expense"]
+    assert set(expense.keys()) == {
+        "id", "date", "description", "category", "category_class", "amount",
+    }
+    assert expense["id"] == eid
+    assert expense["date"] == "2026-08-05"
+    assert expense["description"] == "after edit"
+    assert expense["category"] == "Transport"
+    assert expense["category_class"] == "transport"
+    assert "₹250.50" in expense["amount"]
+
+
+def test_post_edit_ajax_empty_amount_returns_error_and_echoes_values(client):
+    """AJAX POST with empty amount -> {ok:false, error, values} status 200."""
+    _login(client, "demo@spendly.com", "demo123")
+    me, eid = _make_own_expense()
+
+    resp = _post_edit(
+        client, eid,
+        {
+            "amount": "",
+            "category": "Food",
+            "date": "2026-08-05",
+            "description": "echo me",
+        },
+    )
+    assert resp.status_code == 200
+    payload = json.loads(resp.data)
+    assert payload["ok"] is False
+    assert payload["error"] == EMPTY_AMOUNT_MSG.decode("utf-8")
+    assert payload["values"]["amount"] == ""
+    assert payload["values"]["description"] == "echo me"
+    # Row is unchanged in DB
+    row = _fetch_expense_row(eid)
+    assert row["amount"] == 200.00
+
+
+def test_post_edit_ajax_range_error_returns_error(client):
+    """AJAX POST with non-numeric amount -> {ok:false, error} range msg."""
+    _login(client, "demo@spendly.com", "demo123")
+    me, eid = _make_own_expense()
+
+    resp = _post_edit(
+        client, eid,
+        {
+            "amount": "abc",
+            "category": "Food",
+            "date": "2026-08-05",
+            "description": "",
+        },
+    )
+    assert resp.status_code == 200
+    payload = json.loads(resp.data)
+    assert payload["ok"] is False
+    assert payload["error"] == RANGE_AMOUNT_MSG.decode("utf-8")
+
+
+def test_post_edit_ajax_unknown_category_returns_error(client):
+    """AJAX POST with unknown category -> {ok:false, error}."""
+    _login(client, "demo@spendly.com", "demo123")
+    me, eid = _make_own_expense()
+
+    resp = _post_edit(
+        client, eid,
+        {
+            "amount": "50.00",
+            "category": "Crypto",
+            "date": "2026-08-05",
+            "description": "",
+        },
+    )
+    assert resp.status_code == 200
+    payload = json.loads(resp.data)
+    assert payload["ok"] is False
+    assert payload["error"] == BAD_CATEGORY_MSG.decode("utf-8")
+
+
+def test_post_edit_ajax_future_date_returns_error(client):
+    """AJAX POST with future date -> {ok:false, error} future-date msg."""
+    _login(client, "demo@spendly.com", "demo123")
+    me, eid = _make_own_expense()
+
+    resp = _post_edit(
+        client, eid,
+        {
+            "amount": "50.00",
+            "category": "Food",
+            "date": _tomorrow_iso(),
+            "description": "",
+        },
+    )
+    assert resp.status_code == 200
+    payload = json.loads(resp.data)
+    assert payload["ok"] is False
+    assert payload["error"] == FUTURE_DATE_MSG.decode("utf-8")
+
+
+def test_post_edit_ajax_long_description_returns_error(client):
+    """AJAX POST with 201-char description -> {ok:false, error} length msg."""
+    _login(client, "demo@spendly.com", "demo123")
+    me, eid = _make_own_expense()
+
+    resp = _post_edit(
+        client, eid,
+        {
+            "amount": "50.00",
+            "category": "Food",
+            "date": "2026-08-05",
+            "description": "x" * 201,
+        },
+    )
+    assert resp.status_code == 200
+    payload = json.loads(resp.data)
+    assert payload["ok"] is False
+    assert payload["error"] == LONG_DESC_MSG.decode("utf-8")
+
+
+def test_post_edit_without_ajax_header_falls_back_to_html_redirect(client):
+    """Direct nav POST (no X-Requested-With header) keeps the 302 fallback."""
+    _login(client, "demo@spendly.com", "demo123")
+    me, eid = _make_own_expense()
+
+    resp = _post_edit(
+        client, eid,
+        {
+            "amount": "250.50",
+            "category": "Transport",
+            "date": "2026-08-05",
+            "description": "after edit",
+        },
+        ajax=False,
+    )
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/profile")
+    assert not resp.headers.get("Content-Type", "").startswith("application/json")
+
+
+def test_post_edit_ajax_cross_user_returns_404(client):
+    """AJAX POST on another user's id -> 404 (Flask default HTML), no JSON."""
+    _login(client, "demo@spendly.com", "demo123")
+    # Register a second user with their own row
+    other_id = make_user("Other User 8", "other8@example.com", "password123")
+    other_eid = make_expense(
+        other_id, 99.00, "Food", "2026-08-05", "theirs",
+    )
+
+    resp = _post_edit(
+        client, other_eid,
+        {
+            "amount": "1.00",
+            "category": "Food",
+            "date": "2026-08-05",
+            "description": "trying to steal",
+        },
+    )
+    assert resp.status_code == 404
+    # Row is unchanged
+    row = _fetch_expense_row(other_eid)
+    assert row["amount"] == 99.00
+    assert row["description"] == "theirs"
