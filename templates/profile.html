@@ -17,17 +17,26 @@
             </div>
         </div>
         <div class="profile-info-actions">
-            <a href="{{ url_for('add_expense') }}" class="btn-primary">+ Add expense</a>
+            <a href="{{ url_for('add_expense') }}" class="btn-primary"
+               data-open-modal="add-expense-modal">+ Add expense</a>
             <button type="button" class="btn-ghost" disabled title="Edit profile — coming in Step 5">Edit profile</button>
         </div>
     </div>
 
-    {# 2. Summary stats row — total spent / transactions / top category #}
+    {# 2. Summary stats row — total spent / transactions / top category.
+       The value spans carry ids so the modal JS handler can update them
+       in place after an add/edit/delete without a page reload. #}
     <div class="profile-stats">
         {% for stat in stats %}
         <div class="profile-stat">
             <span class="profile-stat-label">{{ stat.label }}</span>
+            {% if loop.index == 1 %}
+            <span id="profile-grand-total" class="profile-stat-value">{{ stat.value }}</span>
+            {% elif loop.index == 2 %}
+            <span id="profile-txn-count" class="profile-stat-value">{{ stat.value }}</span>
+            {% else %}
             <span class="profile-stat-value">{{ stat.value }}</span>
+            {% endif %}
             <span class="profile-stat-meta">{{ stat.meta }}</span>
         </div>
         {% endfor %}
@@ -107,7 +116,7 @@
                     </thead>
                     <tbody>
                         {% for txn in transactions %}
-                        <tr>
+                        <tr data-expense-id="{{ txn.id }}">
                             <td>{{ txn.date }}</td>
                             <td>{{ txn.description }}</td>
                             <td>
@@ -119,7 +128,12 @@
                             <td class="profile-table-actions">
                                 <a class="profile-table-edit-link"
                                    href="{{ url_for('edit_expense', id=txn.id) }}"
+                                   data-open-modal="edit-modal-{{ txn.id }}"
                                    aria-label="Edit transaction from {{ txn.date }}">Edit</a>
+                                <a class="profile-table-delete-link"
+                                   href="{{ url_for('delete_expense', id=txn.id) }}"
+                                   data-open-modal="delete-modal-{{ txn.id }}"
+                                   aria-label="Delete transaction from {{ txn.date }}">Delete</a>
                             </td>
                         </tr>
                         {% endfor %}
@@ -155,5 +169,167 @@
     </div>
 
 </section>
+
+{# ----------------------------------------------------------------- #}
+{# Inline form modals. Each modal contains a real <form> with        #}
+{# data-ajax-form; main.js intercepts submit, posts via fetch with   #}
+{# X-Requested-With: XMLHttpRequest, and updates the DOM on success.  #}
+{# Press Escape or click the backdrop to close; Cancel buttons carry #}
+{# data-close-modal. The Delete modal stays as a confirmation with a  #}
+{# POST form whose danger button carries data-ajax-submit.            #}
+{# ----------------------------------------------------------------- #}
+
+<div id="add-expense-modal" class="modal" hidden aria-hidden="true"
+     role="dialog" aria-modal="true" aria-labelledby="add-expense-modal-title">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-window modal-window--wide" role="document">
+        <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
+        <h2 id="add-expense-modal-title" class="modal-title">Add expense</h2>
+        <p class="modal-body">Record a new spend. You can cancel any time before saving.</p>
+
+        <div class="modal-form-error" hidden role="alert"></div>
+
+        <form method="post" action="{{ url_for('add_expense') }}"
+              class="add-expense-form" data-ajax-form novalidate>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="from" value="{{ filter.from }}">
+            <input type="hidden" name="to" value="{{ filter.to }}">
+
+            <div class="form-group">
+                <label for="add-amount" class="form-field-label">Amount <span class="add-expense-prefix">₹</span></label>
+                <input type="number" name="amount" id="add-amount"
+                       step="0.01" min="0.01" max="1000000" required
+                       class="form-input form-field-input" placeholder="0.00">
+                <p class="add-expense-hint">In Indian rupees. Up to ₹10,00,000.</p>
+            </div>
+
+            <div class="form-group">
+                <label for="add-category" class="form-field-label">Category</label>
+                <select name="category" id="add-category" required
+                        class="form-input form-field-select">
+                    <option value="" disabled selected>Select a category</option>
+                    {% for c in CATEGORIES %}
+                        <option value="{{ c }}">{{ c }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="add-date" class="form-field-label">Date</label>
+                <input type="date" name="date" id="add-date" required
+                       value="{{ today }}" max="{{ today }}"
+                       class="form-input form-field-input">
+            </div>
+
+            <div class="form-group">
+                <label for="add-description" class="form-field-label">Description</label>
+                <textarea name="description" id="add-description"
+                          maxlength="200" rows="2"
+                          placeholder="Optional. e.g. Lunch at office canteen"
+                          class="form-input form-field-textarea"></textarea>
+                <p class="add-expense-hint">Up to 200 characters.</p>
+            </div>
+
+            <div class="add-expense-form-actions">
+                <button type="submit" class="btn-submit">Save expense</button>
+                <button type="button" class="btn-ghost" data-close-modal>Cancel</button>
+            </div>
+
+            <p class="add-expense-required">* Required</p>
+        </form>
+    </div>
+</div>
+
+{% for txn in transactions %}
+<div id="edit-modal-{{ txn.id }}" class="modal" hidden aria-hidden="true"
+     role="dialog" aria-modal="true" aria-labelledby="edit-modal-title-{{ txn.id }}">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-window modal-window--wide" role="document">
+        <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
+        <h2 id="edit-modal-title-{{ txn.id }}" class="modal-title">Edit expense</h2>
+        <p class="modal-body">Change the amount, category, date, or description. Save updates the row in place.</p>
+
+        <div class="modal-form-error" hidden role="alert"></div>
+
+        <form method="post" action="{{ url_for('edit_expense', id=txn.id) }}"
+              class="add-expense-form" data-ajax-form novalidate>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="from" value="{{ filter.from }}">
+            <input type="hidden" name="to" value="{{ filter.to }}">
+
+            <div class="form-group">
+                <label for="edit-amount-{{ txn.id }}" class="form-field-label">Amount <span class="add-expense-prefix">₹</span></label>
+                <input type="number" name="amount" id="edit-amount-{{ txn.id }}"
+                       step="0.01" min="0.01" max="1000000" required
+                       value="{{ txn.amount_raw }}"
+                       class="form-input form-field-input" placeholder="0.00">
+                <p class="add-expense-hint">In Indian rupees. Up to ₹10,00,000.</p>
+            </div>
+
+            <div class="form-group">
+                <label for="edit-category-{{ txn.id }}" class="form-field-label">Category</label>
+                <select name="category" id="edit-category-{{ txn.id }}" required
+                        class="form-input form-field-select">
+                    {% for c in CATEGORIES %}
+                        <option value="{{ c }}"{% if c == txn.category %} selected{% endif %}>{{ c }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="edit-date-{{ txn.id }}" class="form-field-label">Date</label>
+                <input type="date" name="date" id="edit-date-{{ txn.id }}" required
+                       value="{{ txn.date }}" max="{{ today }}"
+                       class="form-input form-field-input">
+            </div>
+
+            <div class="form-group">
+                <label for="edit-description-{{ txn.id }}" class="form-field-label">Description</label>
+                <textarea name="description" id="edit-description-{{ txn.id }}"
+                          maxlength="200" rows="2"
+                          placeholder="Optional. e.g. Lunch at office canteen"
+                          class="form-input form-field-textarea">{{ txn.description }}</textarea>
+                <p class="add-expense-hint">Up to 200 characters.</p>
+            </div>
+
+            <div class="add-expense-form-actions">
+                <button type="submit" class="btn-submit">Save changes</button>
+                <button type="button" class="btn-ghost" data-close-modal>Cancel</button>
+            </div>
+
+            <p class="add-expense-required">* Required</p>
+        </form>
+    </div>
+</div>
+
+<div id="delete-modal-{{ txn.id }}" class="modal" hidden aria-hidden="true"
+     role="dialog" aria-modal="true" aria-labelledby="delete-modal-title-{{ txn.id }}">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-window modal-window--narrow" role="document">
+        <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
+        <h2 id="delete-modal-title-{{ txn.id }}" class="modal-title">Delete this expense?</h2>
+        <p class="modal-body">This will permanently remove the row from your history. This can't be undone.</p>
+        <p class="modal-summary">
+            <span>{{ txn.date }}</span>
+            <span>&middot;</span>
+            <span class="category-badge category-badge--{{ txn.category_class }}">{{ txn.category }}</span>
+            <span>&middot;</span>
+            <strong>{{ txn.amount }}</strong>
+        </p>
+
+        <div class="modal-form-error" hidden role="alert"></div>
+
+        <div class="modal-actions">
+            <button type="button" class="btn-ghost" data-close-modal>Cancel</button>
+            <form method="post" action="{{ url_for('delete_expense', id=txn.id) }}" class="modal-delete-form" data-ajax-form>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="from" value="{{ filter.from }}">
+                <input type="hidden" name="to" value="{{ filter.to }}">
+                <button type="submit" class="btn-danger" data-ajax-submit>Delete</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endfor %}
 
 {% endblock %}

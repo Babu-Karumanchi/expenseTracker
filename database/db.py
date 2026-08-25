@@ -298,3 +298,30 @@ def update_expense(expense_id, user_id, amount, category, date, description):
         return cur.rowcount
     finally:
         conn.close()
+
+
+def delete_expense(expense_id, user_id):
+    """Delete an expense row, owner-scoped. Returns rowcount.
+
+    Parameterised DELETE; the `AND user_id = ?` clause means an attempt to
+    delete another user's row silently affects 0 rows rather than raising.
+    The same `get_expense_by_id(id, user_id)` lookup that the route runs
+    before calling this helper will have already 404'd for ids that don't
+    belong to the session user, so the rowcount return is mostly for
+    testability — callers may safely ignore it.
+
+    `created_at` is intentionally NOT preserved because the row itself is
+    gone — there is no soft-delete column. The row vanishes from the
+    profile page, the stats, and the by-category aggregate on the next
+    `/profile` render.
+    """
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "DELETE FROM expenses WHERE id = ? AND user_id = ?",
+            (expense_id, user_id),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()

@@ -14,8 +14,12 @@ This step **reuses** the Step 7 validation pipeline verbatim — same `CATEGORIE
 
 ## Routes
 - `GET /expenses/<int:id>/edit` — fetch the expense row (scoped to `session["user_id"]`); if missing return 404, otherwise render `edit_expense.html` pre-populated with the row's current values and the date input's `max` set to today — logged-in only (redirect to `/login` if not authenticated)
-- `POST /expenses/<int:id>/edit` — re-validate the form using the same four-rule pipeline as `/expenses/add`; on success update the row (scoped to `session["user_id"]`); on failure re-render the form with the typed values echoed back and an inline error message — logged-in only
-- `GET /expenses/<int:id>/edit` for an `id` that doesn't exist OR doesn't belong to the session user returns **404** (via `abort(404)`), not a generic error page — this prevents an attacker from probing which ids are in use
+- `POST /expenses/<int:id>/edit` — re-validate the form using the same four-rule pipeline as `/expenses/add`; on success update the row (scoped to `session["user_id"]`). The response is branched on the `X-Requested-With` request header:
+  * AJAX (`XMLHttpRequest`) → JSON `{"ok": true, "expense": {id, date, description, category, category_class, amount}, "total": "₹...", "count": N}` (status 200). The modal's JS handler then updates the row in place on `/profile` and overwrites the `#profile-grand-total` (and `#profile-txn-count`, unchanged on Edit) stat tiles from the envelope.
+  * Direct nav (no header) → HTTP 302 to `/profile` (POST-Redirect-GET; preserves the existing no-JS fallback).
+  On validation failure the same split applies: JSON `{"ok": false, "error": "...", "values": {amount, category, date, description}}` for AJAX, or re-render the standalone page with typed values echoed for direct nav. Logged-in only.
+- `GET /expenses/<int:id>/edit` for an `id` that doesn't exist OR doesn't belong to the session user returns **404** (via `abort(404)`), not a generic error page — this prevents an attacker from probing which ids are in use. A cross-user POST also returns 404 (Flask default), and the JS catch block surfaces a generic "Could not save" message inside the modal.
+- **CSRF check** — runs on POST only (not GET). POST carries a hidden `csrf_token` form field bound to `session["csrf_token"]`. The check is a constant-time `hmac.compare_digest`; on mismatch it returns 403 (JSON for AJAX, HTML via `abort(403)` for direct nav). The login + register routes stamp a fresh `session["csrf_token"]` via `secrets.token_urlsafe(32)` so the post-redirect `/profile` GET already has a valid token. Order in the POST handler: AUTH → CSRF → OWNERSHIP (404 for cross-user) → validation.
 
 No new routes beyond the existing stub being promoted.
 
@@ -27,7 +31,7 @@ No schema changes. The `expenses` table already carries every column this step n
 
 ## Templates
 - **Create:** `templates/edit_expense.html` — extends `base.html`; near-clone of `add_expense.html` with three differences: (a) heading reads "Edit expense", subtitle reflects the row's date/amount for context; (b) every input is pre-filled from the row (the `<select>` marks the row's category as `selected`); (c) submit button reads "Save changes" instead of "Save expense". Same `.form-error` banner, same `.add-expense-form-actions` row with a ghost "Cancel" link back to `/profile`, same `* Required` footer.
-- **Modify:** `templates/profile.html` — add an `Actions` column (or, to avoid widening the table, a trailing cell on each row containing an "Edit" link → `url_for('edit_expense', id=txn.id)`) to the recent-transactions table. The link uses the existing `.btn-ghost` token so it sits flush with the rest of the page chrome.
+- **Modify:** `templates/profile.html` — add an `Actions` column (or, to avoid widening the table, a trailing cell on each row containing an "Edit" link → `url_for('edit_expense', id=txn.id)`) to the recent-transactions table. The link uses the existing `.btn-ghost` token so it sits flush with the rest of the page chrome. The link carries `data-open-modal="edit-modal-<txn.id>"` so it opens an inline form modal containing a real `<form method="post" action="{{ url_for('edit_expense', id=txn.id) }}" data-ajax-form>` pre-populated from the row — see the "Inline form modal" appendix below.
 
 ## Files to change
 - `app.py` — replace the `/expenses/<int:id>/edit` stub with a real `GET / POST` view; add a route-scoped `Decimal` amount parser mirroring the Step 7 branches; add a small `_render_edit_expense_error(expense_id, today, amount, category, date_str, description)` helper that re-uses the same template; update the import block to include `update_expense` and `get_expense_by_id`
@@ -95,8 +99,23 @@ If the row id is missing or doesn't belong to the session user, the route `abort
 - Submitting an empty/whitespace-only description stores NULL in the column (matches the add-expense convention; the description cell on `/profile` renders as empty)
 - An attacker submitting a `user_id` field is ignored; the updated row's `user_id` remains the original owner
 - An attacker submitting a POST to `/expenses/<other-user-id>/edit` returns 404, not 200, and no row is updated
-- The Edit link is visible on every row of the recent-transactions table on `/profile` and links to the matching `/expenses/<id>/edit`
+- The Edit link is visible on every row of the recent-transactions table on `/profile` and opens an inline form modal (see appendix) instead of navigating
 - All existing tests (43 tests across `test_profile.py`, `test_06-date-filter-profile.py`, `test_07_add_expense.py`) still pass
 - No new hex values in `style.css`; every new CSS rule uses existing variables
 - Every SQL string in `database/db.py` uses `?` placeholders
 - No new pip packages added
+
+## Inline form modal (replaces the pre-navigation gate)
+
+The Edit link on `/profile` opens a styled modal that contains a real `<form method="post" action="{{ url_for('edit_expense', id=txn.id) }}">` pre-populated from the row's current values — there is **no navigation**. Submitting the form posts via `fetch()` to `/expenses/<id>/edit` with the header `X-Requested-With: XMLHttpRequest`. On success the modal's JS handler updates the row's cells in place on `/profile` and closes the modal. On validation failure the error renders inside the modal and the typed values are echoed back into the inputs.
+
+The modal is part of the wider `/profile` modal scheme documented in full in `.claude/specs/09-delete-expense.md` (which covers the `data-open-modal` / `data-close-modal` / `data-ajax-form` infrastructure, the CSS variables, and the JS submit handler). The contract specific to the per-row Edit modal is:
+
+- **Trigger:** the per-row Edit link carries `data-open-modal="edit-modal-<txn.id>"` (the `href` is preserved for no-JS fallback and a11y).
+- **Heading:** "Edit expense".
+- **Body:** "Change the amount, category, date, or description. Save updates the row in place."
+- **Form:** a `<form method="post" action="/expenses/<id>/edit" data-ajax-form novalidate>` carrying the same four fields as `add_expense.html`, pre-populated from the row (`amount` uses the raw numeric `str(row["amount"])` so the input shows what the DB stored, e.g. "450.0"; `category` selects the row's category as `selected`; `date` mirrors the row's date; `description` echoes the row's description). The date input's `max` attribute is set to today. The form also carries three hidden inputs (in this order, immediately after the opening tag): `csrf_token` (bound to `session["csrf_token"]`), `from` and `to` (the page's current date-filter bounds; empty strings on the default unfiltered view). The same hidden `csrf_token` input is embedded in `templates/edit_expense.html` for the no-JS fallback path.
+- **Actions:** a primary "Save changes" submit button and a ghost "Cancel" button (carries `data-close-modal`).
+- **Width:** `.modal-window--wide` (~600px) so the four fields fit comfortably.
+
+This spec is the authority on the edit form itself; the modal is the form's primary UX surface. The form, validation, ownership check, and redirect (for the no-JS fallback) are unchanged.

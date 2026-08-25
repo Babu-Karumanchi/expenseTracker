@@ -15,7 +15,11 @@ This is the first step that **writes** through the schema seeded in Step 1 and r
 
 ## Routes
 - `GET /expenses/add` — render the empty add-expense form with the date field pre-filled with today's ISO date and the category dropdown populated with the 7 fixed categories — logged-in only (redirect to `/login` if not authenticated)
-- `POST /expenses/add` — validate `amount`, `category`, `date`, `description`; on success insert a row into `expenses` and redirect (HTTP 302) to `/profile`; on failure re-render the form with the typed values echoed back and an inline error message — logged-in only
+- `POST /expenses/add` — validate `amount`, `category`, `date`, `description`; on success insert a row into `expenses`. The response is branched on the `X-Requested-With` request header:
+  * AJAX (`XMLHttpRequest`) → JSON `{"ok": true, "expense": {id, date, description, category, category_class, amount}, "total": "₹...", "count": N}` (status 200). The modal's JS handler then renders the new row in place on `/profile` and overwrites the `#profile-grand-total` and `#profile-txn-count` stat tiles from the envelope (so a filtered `/profile?preset=last_3_months` keeps showing filtered stats after the Add).
+  * Direct nav (no header) → HTTP 302 to `/profile` (POST-Redirect-GET; preserves the existing no-JS fallback).
+  On validation failure the same split applies: JSON `{"ok": false, "error": "...", "values": {amount, category, date, description}}` for AJAX, or re-render the standalone page with typed values echoed for direct nav. Logged-in only.
+- **CSRF check** — runs on POST only (not GET). POST carries a hidden `csrf_token` form field bound to `session["csrf_token"]`. The check is a constant-time `hmac.compare_digest`; on mismatch it returns 403 (JSON for AJAX, HTML via `abort(403)` for direct nav). The login + register routes stamp a fresh `session["csrf_token"]` via `secrets.token_urlsafe(32)` so the post-redirect `/profile` GET already has a valid token. Order in the POST handler: AUTH → CSRF → ownership (no-op for add) → validation.
 
 No new routes beyond the existing stub being promoted.
 
@@ -24,7 +28,7 @@ No schema changes. The `expenses` table already carries every column this step n
 
 ## Templates
 - **Create:** `templates/add_expense.html` — extends `base.html`; renders the form with a `form-error` banner on validation failure, four fields (amount, category, date, description), a primary "Save expense" submit button, and a ghost "Cancel" link back to `/profile`
-- **Modify:** `templates/profile.html` — wrap the existing disabled "Edit profile" button in a new `.profile-info-actions` flex container and prepend a `+ Add expense` link (uses `.btn-primary`) pointing at `url_for('add_expense')`
+- **Modify:** `templates/profile.html` — wrap the existing disabled "Edit profile" button in a new `.profile-info-actions` flex container and prepend a `+ Add expense` link (uses `.btn-primary`) pointing at `url_for('add_expense')`. The link carries `data-open-modal="add-expense-modal"` so clicking it opens a styled modal containing a real `<form method="post" action="{{ url_for('add_expense') }}" data-ajax-form>` — see the "Inline form modal" appendix below. The form's URL and POST flow are unchanged from the route's perspective.
 
 ## Files to change
 - `app.py` — replace the `/expenses/add` stub with the real GET/POST view; add `from decimal import Decimal, InvalidOperation`; add `CATEGORIES`, `AMOUNT_MIN`, `AMOUNT_MAX`, `AMOUNT_RANGE_ERROR` module-level constants; add `_render_add_expense_error` helper
@@ -82,8 +86,25 @@ Validation runs in this fixed order, returning the form with the typed values ec
 - Submitting a 201-character description shows the length error
 - Submitting a 200-character description succeeds
 - An attacker submitting a `user_id` field is ignored; the inserted row's `user_id` is always the session user's id
-- The `+ Add expense` CTA is visible on `/profile` next to the disabled "Edit profile" button, inside the user-info card
+- The `+ Add expense` CTA is visible on `/profile` next to the disabled "Edit profile" button, inside the user-info card, and opens an inline form modal (see appendix) instead of navigating
 - All existing tests (41 tests across `test_profile.py` and `test_06-date-filter-profile.py`) still pass
 - No new hex values in `style.css`; every new CSS rule uses existing variables
 - Every SQL string in `database/db.py` uses `?` placeholders
 - No new pip packages added
+
+## Inline form modal (replaces the pre-navigation gate)
+
+The `+ Add expense` CTA on `/profile` opens a styled modal that contains a real `<form method="post" action="{{ url_for('add_expense') }}">` — there is **no navigation**. Submitting the form posts via `fetch()` to `/expenses/add` with the header `X-Requested-With: XMLHttpRequest`. On success the modal's JS handler renders the new row at the top of the recent-transactions table on `/profile` and closes the modal. On validation failure the error renders inside the modal and the typed values are echoed back into the inputs.
+
+The modal is part of the wider `/profile` modal scheme documented in full in `.claude/specs/09-delete-expense.md` (which covers the `data-open-modal` / `data-close-modal` / `data-ajax-form` infrastructure, the CSS variables, and the JS submit handler). The contract specific to the Add expense modal is:
+
+- **Trigger:** the `+ Add expense` link carries `data-open-modal="add-expense-modal"` (the `href` is preserved for no-JS fallback and a11y).
+- **Heading:** "Add expense".
+- **Body:** "Record a new spend. You can cancel any time before saving."
+- **Form:** a `<form method="post" action="/expenses/add" data-ajax-form novalidate>` carrying the same four fields (`amount`, `category`, `date`, `description`) with the same input attributes (`step="0.01"`, `min="0.01"`, `max="1000000"`, `maxlength="200"`) as `add_expense.html`. The date input is pre-filled with today's ISO date. The form also carries three hidden inputs (in this order, immediately after the opening tag):
+  - `<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">` — bound to `session["csrf_token"]`, validated server-side on POST.
+  - `<input type="hidden" name="from" value="{{ filter.from }}">` and `<input type="hidden" name="to" value="{{ filter.to }}">` — the page's current date-filter bounds, so the success envelope's `total`/`count` reflect the same filter the user is looking at. Empty strings on the default unfiltered view.
+- **Actions:** a primary "Save expense" submit button and a ghost "Cancel" button (carries `data-close-modal`).
+- **Width:** `.modal-window--wide` (~600px) so the four fields fit comfortably.
+
+This spec is the authority on the add form itself; the modal is the form's primary UX surface. The form, validation, ownership check, and redirect (for the no-JS fallback) are unchanged.

@@ -1,10 +1,12 @@
+import hmac
 import os
 import re
+import secrets
 import sqlite3
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
-from flask import Flask, render_template, request, redirect, url_for, session, abort
+from flask import Flask, render_template, request, redirect, url_for, session, abort, jsonify
 
 from database.db import (
     get_db,
@@ -18,6 +20,7 @@ from database.db import (
     get_user_stats,
     get_expense_by_id,
     update_expense,
+    delete_expense as delete_expense_row,
     verify_password,
 )
 
@@ -49,6 +52,180 @@ AMOUNT_MAX = Decimal("1000000")
 # consistent across the two amount-validation branches (non-numeric and
 # out-of-range).
 AMOUNT_RANGE_ERROR = "Please enter a valid amount between ₹0.01 and ₹10,00,000."
+
+
+# ------------------------------------------------------------------ #
+# AJAX detection + JSON helpers                                       #
+# ------------------------------------------------------------------ #
+# The Add/Edit/Delete modals on /profile submit via fetch() with a
+# custom header so the server can return JSON instead of HTML/302.
+# Direct browser navigation to /expenses/add or /expenses/<id>/edit
+# (no-JS fallback) still gets the existing HTML response.
+#
+# NOTE: `X-Requested-With` is NOT a CSRF defense — any same-origin
+# context (curl, a same-origin XSS bug, a malicious same-origin page)
+# can forge the header. Every state-changing POST also carries a
+# `csrf_token` form field validated against `session["csrf_token"]`
+# (see `_get_or_create_csrf` / `_verify_csrf` below).
+
+def _is_ajax():
+    """True when the request comes from a fetch() call inside a modal."""
+    return request.headers.get("X-Requested-With", "").lower() == "xmlhttprequest"
+
+
+def _get_or_create_csrf():
+    """Return the per-session CSRF token, minting one on first use.
+
+    Token source: `secrets.token_urlsafe(32)` — 32 bytes of entropy
+    base64-url-encoded (well above the OWASP minimum). Stored in
+    `session["csrf_token"]` so it rotates with the session and is wiped
+    by `session.clear()` on login / register / logout.
+    """
+    token = session.get("csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["csrf_token"] = token
+    return token
+
+
+def _verify_csrf():
+    """Validate the form's `csrf_token` against the session's.
+
+    Called from every state-changing POST handler, immediately AFTER
+    the auth guard so signed-out POSTs continue to 302 to /login
+    (not 403) — that ordering matters for the existing
+    `test_signed_out_post_redirects_to_login` tests.
+
+    Returns:
+        None when the token matches.
+        On mismatch / missing token:
+          * AJAX (`X-Requested-With: XMLHttpRequest`) → JSON 403
+            so the modal's `.catch` shows the generic error message.
+          * Direct nav (no header) → Flask default HTML 403 via
+            `abort(403)` (per CLAUDE.md: "`abort()` for HTTP errors").
+    """
+    session_token = session.get("csrf_token") or ""
+    request_token = request.form.get("csrf_token") or ""
+    if not session_token or not hmac.compare_digest(
+        str(session_token), str(request_token)
+    ):
+        if _is_ajax():
+            resp = jsonify({
+                "ok": False,
+                "error": "Security token missing or invalid.",
+            })
+            resp.status_code = 403
+            return resp
+        abort(403)
+    return None
+
+
+@app.context_processor
+def inject_csrf():
+    """Expose the CSRF token to every template via `csrf_token()`.
+
+    Calling the helper (rather than binding the raw value) means the
+    token is minted on first render and persisted in the session for
+    subsequent requests, even if the template was rendered before the
+    login / register POST stamped it.
+    """
+    return {"csrf_token": _get_or_create_csrf}
+
+
+def _stats_payload():
+    """Build the Total Spent + Transactions stats for the AJAX envelope.
+
+    The modal JS handler overwrites `#profile-grand-total` and
+    `#profile-txn-count` from these values so the stat tiles stay
+    in sync without a page reload.
+
+    Honours the page's `from` / `to` filter (carried as hidden form
+    inputs on every modal) so a filtered `/profile?preset=last_3_months`
+    keeps showing the filtered stats — without bounds, the unfiltered
+    totals would jump in confusingly after an Add. Bad inputs fall
+    back to no bounds rather than returning an error envelope.
+    """
+    from_bound = (request.form.get("from") or "").strip()
+    to_bound = (request.form.get("to") or "").strip()
+    if from_bound and not DATE_RE.fullmatch(from_bound):
+        from_bound = ""
+    if to_bound and not DATE_RE.fullmatch(to_bound):
+        to_bound = ""
+    stats = get_user_stats(
+        session["user_id"],
+        date_from=from_bound or None,
+        date_to=to_bound or None,
+    )
+    return {
+        "total": f"₹{stats['total']:,.2f}",
+        "count": stats["count"],
+    }
+
+
+def _expense_payload(row):
+    """Build the dict the modal-success JSON returns AND the profile
+    template already uses for each row.
+
+    Single source of truth so the JS-rendered row markup matches the
+    server-rendered markup byte-for-byte (modulo dynamic ids).
+    """
+    return {
+        "id": row["id"],
+        "date": row["date"],
+        "description": row["description"] or "",
+        "category": row["category"],
+        "category_class": row["category"].lower(),
+        "amount": f"₹{row['amount']:,.2f}",
+    }
+
+
+def _json_ok(**fields):
+    """Success envelope: {"ok": true, ...fields}. Status 200."""
+    return jsonify({"ok": True, **fields})
+
+
+def _json_error(message, **extra):
+    """Failure envelope: {"ok": false, "error": message, ...extra}. Status 200.
+
+    Validation failures use 200 (not 4xx) so the JS success path doesn't
+    have to branch on status — the `ok` flag is the single source of truth.
+    The extra kwargs (typically `values=...`) ride along in the payload.
+    """
+    return jsonify({"ok": False, "error": message, **extra})
+
+
+def _add_expense_invalid(message, today, amount, category, date_str, description):
+    """Branch on _is_ajax(): JSON for the modal, HTML for direct nav."""
+    if _is_ajax():
+        return _json_error(
+            message,
+            values={
+                "amount": amount,
+                "category": category,
+                "date": date_str,
+                "description": description,
+            },
+        )
+    return _render_add_expense_error(
+        message, today, amount, category, date_str, description
+    )
+
+
+def _edit_expense_invalid(message, expense, today, amount, category, date_str, description):
+    """Branch on _is_ajax(): JSON for the modal, HTML for direct nav."""
+    if _is_ajax():
+        return _json_error(
+            message,
+            values={
+                "amount": amount,
+                "category": category,
+                "date": date_str,
+                "description": description,
+            },
+        )
+    return _render_edit_expense_error(
+        message, expense, today, amount, category, date_str, description
+    )
 
 
 def _today():
@@ -164,6 +341,10 @@ def register():
     session.clear()
     session["user_id"] = user_id
     session["user_name"] = name
+    # Stamp a fresh CSRF token into the session so the post-redirect
+    # /profile GET (which renders the modal forms) already has a token
+    # the server will accept on the next POST.
+    session["csrf_token"] = secrets.token_urlsafe(32)
     return redirect(url_for("profile"))
 
 
@@ -198,6 +379,10 @@ def login():
     session.clear()
     session["user_id"] = user["id"]
     session["user_name"] = user["name"]
+    # Stamp a fresh CSRF token into the session so the post-redirect
+    # /profile GET (which renders the modal forms) already has a token
+    # the server will accept on the next POST.
+    session["csrf_token"] = secrets.token_urlsafe(32)
     return redirect(url_for("profile"))
 
 
@@ -354,6 +539,11 @@ def profile():
             "category": row["category"],
             "category_class": row["category"].lower(),
             "amount": f"₹{row['amount']:,.2f}",
+            # Raw numeric string used to pre-populate the edit-modal's
+            # amount input. Kept as str(row["amount"]) so the input shows
+            # exactly what the DB stored (e.g. "450.0", not a re-formatted
+            # rupee string).
+            "amount_raw": str(row["amount"]),
         })
 
     # Categories table — high -> low by total, with count and percentage.
@@ -392,6 +582,8 @@ def profile():
         filter_error=filter_error,
         presets=PRESETS,
         active_preset=active_preset,
+        today=today.isoformat(),
+        CATEGORIES=CATEGORIES,
     )
 
 
@@ -433,8 +625,11 @@ def add_expense():
            "Description must be 200 characters or fewer."
 
     On success the row is inserted via `create_expense(...)` (empty
-    description stored as NULL) and the user is redirected (HTTP 302)
-    to `/profile` so a refresh resubmits the GET there, not the POST.
+    description stored as NULL) and the response is either:
+      * AJAX (modal submission) — JSON `{"ok": true, "expense": {...}}`
+        so the modal's JS handler can render the new row in place.
+      * Direct nav (no-JS fallback) — HTTP 302 to /profile so a refresh
+        resubmits the GET there, not the POST.
     """
     if not session.get("user_id"):
         return redirect(url_for("login"))
@@ -452,6 +647,11 @@ def add_expense():
             CATEGORIES=CATEGORIES,
         )
 
+    # POST: CSRF check runs only on state-changing requests.
+    csrf_error = _verify_csrf()
+    if csrf_error is not None:
+        return csrf_error
+
     # POST — read raw form values. Strip whitespace on category /
     # description (free text); leave amount / date raw (mechanical).
     amount_raw = request.form.get("amount") or ""
@@ -461,14 +661,14 @@ def add_expense():
 
     # 1. amount
     if amount_raw == "":
-        return _render_add_expense_error(
+        return _add_expense_invalid(
             "Please enter an amount.",
             today, amount_raw, category, date_raw, description,
         )
     try:
         amount_decimal = Decimal(amount_raw)
     except (InvalidOperation, ValueError):
-        return _render_add_expense_error(
+        return _add_expense_invalid(
             AMOUNT_RANGE_ERROR,
             today, amount_raw, category, date_raw, description,
         )
@@ -482,54 +682,58 @@ def add_expense():
         or amount_decimal < AMOUNT_MIN
         or amount_decimal > AMOUNT_MAX
     ):
-        return _render_add_expense_error(
+        return _add_expense_invalid(
             AMOUNT_RANGE_ERROR,
             today, amount_raw, category, date_raw, description,
         )
 
     # 2. category
     if category not in CATEGORIES:
-        return _render_add_expense_error(
+        return _add_expense_invalid(
             "Please choose a category.",
             today, amount_raw, category, date_raw, description,
         )
 
     # 3. date
     if not DATE_RE.fullmatch(date_raw):
-        return _render_add_expense_error(
+        return _add_expense_invalid(
             "Please enter a valid date.",
             today, amount_raw, category, date_raw, description,
         )
     try:
         parsed_date = date.fromisoformat(date_raw)
     except ValueError:
-        return _render_add_expense_error(
+        return _add_expense_invalid(
             "Please enter a valid date.",
             today, amount_raw, category, date_raw, description,
         )
     if parsed_date > _today():
-        return _render_add_expense_error(
+        return _add_expense_invalid(
             "Date cannot be in the future.",
             today, amount_raw, category, date_raw, description,
         )
 
     # 4. description
     if len(description) > 200:
-        return _render_add_expense_error(
+        return _add_expense_invalid(
             "Description must be 200 characters or fewer.",
             today, amount_raw, category, date_raw, description,
         )
 
-    # Success — persist then redirect (POST-Redirect-GET).
+    # Success — persist then either return JSON (modal) or redirect
+    # (direct nav / no-JS fallback).
     # Empty description is stored as NULL by `create_expense` itself, so
     # the route passes the user-typed string through unchanged.
-    create_expense(
+    new_id = create_expense(
         session["user_id"],
         float(amount_decimal),
         category,
         parsed_date.isoformat(),
         description,
     )
+    if _is_ajax():
+        new_row = get_expense_by_id(new_id, session["user_id"])
+        return _json_ok(expense=_expense_payload(new_row), **_stats_payload())
     return redirect(url_for("profile"))
 
 
@@ -578,19 +782,25 @@ def edit_expense(id):
         4. description — len <= 200 after stripping.
 
     On success the row is updated via `update_expense(...)` (empty
-    description stored as NULL) and the user is redirected (HTTP 302)
-    to `/profile` so a refresh resubmits the GET there, not the POST.
+    description stored as NULL) and the response is either:
+      * AJAX (modal submission) — JSON `{"ok": true, "expense": {...}}`
+        so the modal's JS handler can update the row in place.
+      * Direct nav (no-JS fallback) — HTTP 302 to /profile so a refresh
+        resubmits the GET there, not the POST.
     """
     if not session.get("user_id"):
         return redirect(url_for("login"))
 
-    expense = get_expense_by_id(id, session["user_id"])
-    if expense is None:
-        abort(404)
-
     today = _today().isoformat()
 
     if request.method == "GET":
+        # GET short-circuits to the form (or 404) without touching CSRF —
+        # GET is not a state-changing request. Ownership is enforced here
+        # so /expenses/<id>/edit 404s uniformly for unknown and cross-user
+        # ids on the standalone page.
+        expense = get_expense_by_id(id, session["user_id"])
+        if expense is None:
+            abort(404)
         # Pre-populate from the row. `amount` is rendered as the raw float
         # `str()` cast so the input shows what the DB stored (e.g. "450.0",
         # not a re-formatted rupee string). `description` falls back to ""
@@ -606,6 +816,19 @@ def edit_expense(id):
             CATEGORIES=CATEGORIES,
         )
 
+    # POST: CSRF check fires BEFORE the ownership check (matching
+    # delete_expense's auth → CSRF → ownership ordering). This keeps the
+    # CSRF defence uniform — a request without a valid token always
+    # gets 403, regardless of whether the target id exists or belongs
+    # to the caller.
+    csrf_error = _verify_csrf()
+    if csrf_error is not None:
+        return csrf_error
+
+    expense = get_expense_by_id(id, session["user_id"])
+    if expense is None:
+        abort(404)
+
     # POST — read raw form values. Strip whitespace on category /
     # description (free text); leave amount / date raw (mechanical).
     amount_raw = request.form.get("amount") or ""
@@ -615,14 +838,14 @@ def edit_expense(id):
 
     # 1. amount
     if amount_raw == "":
-        return _render_edit_expense_error(
+        return _edit_expense_invalid(
             "Please enter an amount.",
             expense, today, amount_raw, category, date_raw, description,
         )
     try:
         amount_decimal = Decimal(amount_raw)
     except (InvalidOperation, ValueError):
-        return _render_edit_expense_error(
+        return _edit_expense_invalid(
             AMOUNT_RANGE_ERROR,
             expense, today, amount_raw, category, date_raw, description,
         )
@@ -634,45 +857,46 @@ def edit_expense(id):
         or amount_decimal < AMOUNT_MIN
         or amount_decimal > AMOUNT_MAX
     ):
-        return _render_edit_expense_error(
+        return _edit_expense_invalid(
             AMOUNT_RANGE_ERROR,
             expense, today, amount_raw, category, date_raw, description,
         )
 
     # 2. category
     if category not in CATEGORIES:
-        return _render_edit_expense_error(
+        return _edit_expense_invalid(
             "Please choose a category.",
             expense, today, amount_raw, category, date_raw, description,
         )
 
     # 3. date
     if not DATE_RE.fullmatch(date_raw):
-        return _render_edit_expense_error(
+        return _edit_expense_invalid(
             "Please enter a valid date.",
             expense, today, amount_raw, category, date_raw, description,
         )
     try:
         parsed_date = date.fromisoformat(date_raw)
     except ValueError:
-        return _render_edit_expense_error(
+        return _edit_expense_invalid(
             "Please enter a valid date.",
             expense, today, amount_raw, category, date_raw, description,
         )
     if parsed_date > _today():
-        return _render_edit_expense_error(
+        return _edit_expense_invalid(
             "Date cannot be in the future.",
             expense, today, amount_raw, category, date_raw, description,
         )
 
     # 4. description
     if len(description) > 200:
-        return _render_edit_expense_error(
+        return _edit_expense_invalid(
             "Description must be 200 characters or fewer.",
             expense, today, amount_raw, category, date_raw, description,
         )
 
-    # Success — persist then redirect (POST-Redirect-GET).
+    # Success — persist then either return JSON (modal) or redirect
+    # (direct nav / no-JS fallback).
     # Empty description is stored as NULL by `update_expense` itself,
     # so the route passes the user-typed string through unchanged.
     update_expense(
@@ -683,6 +907,9 @@ def edit_expense(id):
         parsed_date.isoformat(),
         description,
     )
+    if _is_ajax():
+        updated_row = get_expense_by_id(id, session["user_id"])
+        return _json_ok(expense=_expense_payload(updated_row), **_stats_payload())
     return redirect(url_for("profile"))
 
 
@@ -708,9 +935,48 @@ def _render_edit_expense_error(error, expense, today, amount, category, date_str
     )
 
 
-@app.route("/expenses/<int:id>/delete")
+@app.route("/expenses/<int:id>/delete", methods=["POST"])
 def delete_expense(id):
-    return "Delete expense — coming in Step 9"
+    """Owner-scoped delete. POST-only — the modal on /profile is the only UI gate.
+
+    Auth guard: an empty session redirects to /login before any DB call.
+    The route never accepts `user_id` from the form — that value is
+    always taken from `session["user_id"]`.
+
+    Ownership guard: `get_expense_by_id(id, session_user_id)` scopes the
+    SELECT with `AND user_id = ?`. A miss covers both "doesn't exist" and
+    "belongs to a different user", and the route `abort(404)`s uniformly
+    so an attacker probing ids cannot distinguish the two cases by status
+    code. The guard fires before the DELETE runs, so a cross-user POST
+    returns 404 without touching the row.
+
+    On success the row is deleted via `delete_expense_row(...)` and the
+    response is either:
+      * AJAX (modal submission) — JSON `{"ok": true, "id": <int>}` so the
+        modal's JS handler can remove the row from /profile in place.
+      * Direct nav (no-JS fallback) — HTTP 302 to /profile so a refresh
+        resubmits the GET there, not the POST.
+
+    A direct GET to this URL returns 405 Method Not Allowed (Flask's
+    default) — there is no GET resource to render. The user-facing gate
+    is the Delete modal on /profile, which renders a POST form that
+    targets this endpoint.
+    """
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    csrf_error = _verify_csrf()
+    if csrf_error is not None:
+        return csrf_error
+
+    expense = get_expense_by_id(id, session["user_id"])
+    if expense is None:
+        abort(404)
+
+    delete_expense_row(id, session["user_id"])
+    if _is_ajax():
+        return _json_ok(id=id, **_stats_payload())
+    return redirect(url_for("profile"))
 
 
 # ------------------------------------------------------------------ #

@@ -33,9 +33,34 @@ def reset_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client():
-    """Flask test client with TESTING enabled."""
+    """Flask test client with TESTING enabled and CSRF auto-injection.
+
+    Wraps the test client's `.post` so that — when the session has a
+    CSRF token (i.e. the user has logged in or registered) and the
+    caller didn't supply one — the token is automatically merged into
+    the form data. This keeps the existing test call sites
+    (`client.post(url, data={"amount": ...})`) working unchanged.
+
+    Tests that explicitly want the missing-token 403 path should
+    pass `data={"_skip_csrf": "1"}` (or set a sentinel — see the new
+    tests/test_csrf_and_envelope.py for examples).
+    """
     flask_app.config["TESTING"] = True
-    return flask_app.test_client()
+    tc = flask_app.test_client()
+    _original_post = tc.post
+
+    def _post_with_csrf(*args, **kwargs):
+        data = kwargs.get("data")
+        if isinstance(data, dict) and "csrf_token" not in data:
+            token = csrf_token_of(tc)
+            if token is not None:
+                # Don't mutate the caller's dict.
+                data = {**data, "csrf_token": token}
+                kwargs["data"] = data
+        return _original_post(*args, **kwargs)
+
+    tc.post = _post_with_csrf
+    return tc
 
 
 # ------------------------------------------------------------------ #
@@ -48,17 +73,35 @@ def make_user(name="Test User", email="test@example.com", password="password123"
 
 
 def make_expense(user_id, amount, category, date, description=""):
-    """Insert one expense row directly so tests can stage exact dates/amounts."""
+    """Insert one expense row directly so tests can stage exact dates/amounts.
+    Returns the new row's id so callers can reference it later.
+    """
     conn = _db.get_db()
     try:
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO expenses (user_id, amount, category, date, description) "
             "VALUES (?, ?, ?, ?, ?)",
             (user_id, amount, category, date, description),
         )
         conn.commit()
+        return cur.lastrowid
     finally:
         conn.close()
+
+
+def csrf_token_of(client):
+    """Return the CSRF token currently in the test session, or None.
+
+    The login / register route stamps a fresh token into the session,
+    so any test that has just called `_login` (or registered + logged
+    in) can pull it from the cookie jar to drive a subsequent POST.
+
+    Returns None when no token is present — callers that POST to a
+    CSRF-protected endpoint can branch on this to assert 403 instead
+    of building a request that will always fail.
+    """
+    with client.session_transaction() as sess:
+        return sess.get("csrf_token")
 
 
 def _login(client, email, password):
