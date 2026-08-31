@@ -8,13 +8,179 @@
 
 {% block content %}
 
-<section class="analytics-section">
-    <span class="analytics-badge">Coming soon</span>
-    <h1 class="analytics-title">Analytics</h1>
-    <p class="analytics-subtitle">
-        We're building charts and trends to help you understand your spending.
-    </p>
-    <p class="analytics-meta">Check back soon.</p>
+<section class="analytics-dashboard">
+
+    {# 1. Header — kept the badge/title pattern from the stub, refreshed copy. #}
+    <header class="analytics-header">
+        <span class="analytics-badge">Analytics</span>
+        <h1 class="analytics-title">Where your money is going</h1>
+        <p class="analytics-subtitle">
+            A quick read on your spending — total, by category, and by day of the week.
+        </p>
+    </header>
+
+    {# 2. KPI strip — 4 cards derived from get_user_stats(). Same .profile-stat
+       visual language as /profile; .analytics-kpis overrides the grid to 4-col. #}
+    <section class="profile-stats analytics-kpis" aria-label="Key metrics">
+        <div class="profile-stat">
+            <span class="profile-stat-label">Total spent</span>
+            <span class="profile-stat-value">₹{{ "{:,.2f}".format(kpis.total) }}</span>
+            <span class="profile-stat-meta">in selected period</span>
+        </div>
+        <div class="profile-stat">
+            <span class="profile-stat-label">Transactions</span>
+            <span class="profile-stat-value">{{ kpis.count }}</span>
+            <span class="profile-stat-meta">recorded</span>
+        </div>
+        <div class="profile-stat">
+            <span class="profile-stat-label">Average per transaction</span>
+            <span class="profile-stat-value">
+                {% if kpis.count > 0 %}₹{{ "{:,.2f}".format(kpis.average) }}{% else %}—{% endif %}
+            </span>
+            <span class="profile-stat-meta">total / count</span>
+        </div>
+        <div class="profile-stat">
+            <span class="profile-stat-label">Top category</span>
+            <span class="profile-stat-value">
+                {% if kpis.top_category %}
+                    <span class="category-badge category-badge--{{ kpis.top_category|lower }}">
+                        {{ kpis.top_category }}
+                    </span>
+                {% else %}—{% endif %}
+            </span>
+            <span class="profile-stat-meta">
+                {% if kpis.top_category %}
+                    ₹{{ "{:,.2f}".format(kpis.top_category_total) }}
+                {% else %}no data yet{% endif %}
+            </span>
+        </div>
+    </section>
+
+    {# 3. Preset pill row — mirrors /profile. /analytics accepts the same
+       ?preset= query param so the date-filter UX is consistent across pages. #}
+    <section class="profile-presets analytics-presets" role="tablist"
+             aria-label="Date range presets">
+        {% for preset in presets %}
+            {% set is_active = (preset.id == active_preset) %}
+            <a class="profile-pill{% if is_active %} profile-pill--active{% endif %}"
+               role="tab"
+               aria-selected="{{ 'true' if is_active else 'false' }}"
+               href="{{ url_for('analytics', preset=preset.id) }}">{{ preset.label }}</a>
+        {% endfor %}
+    </section>
+
+    {% if is_empty %}
+
+        {# 4. Empty state — replaces the chart + breakdowns entirely when the
+           user has zero expenses. KPI strip + preset pills still render above
+           so the page reads as a real dashboard even before any data exists. #}
+        <section class="profile-card analytics-empty">
+            <h2 class="analytics-empty-title">No expenses yet</h2>
+            <p class="analytics-empty-copy">
+                Add your first expense from your profile and your dashboard will populate here.
+            </p>
+            <a href="{{ url_for('profile') }}" class="btn-primary analytics-empty-cta">Go to /profile</a>
+        </section>
+
+    {% else %}
+
+        {# 5. Monthly trend — inline SVG bar chart, 12 bars oldest → newest,
+           ending at the current month. The current month is highlighted via
+           .analytics-chart-bar--current; zero-spend months render as a 1px
+           tick so the cadence is preserved without a useless "0" label. #}
+        <section class="profile-card analytics-chart-card">
+            <h2 class="profile-card-title">Monthly trend</h2>
+            <p class="analytics-card-sub">Last 12 months ending {{ today_month_label }}</p>
+            <div class="analytics-chart">
+                <svg viewBox="0 0 600 220" role="img"
+                     aria-label="Monthly spending for the last 12 months"
+                     preserveAspectRatio="none" class="analytics-chart-svg">
+                    {% set slot = 50 %}
+                    {% set chart_h = 180 %}
+                    {% set baseline_y = 200 %}
+                    {% set bar_w = 42 %}
+                    {% for b in monthly_buckets %}
+                        {% set x = loop.index0 * slot + 4 %}
+                        {% set label_x = x + (bar_w / 2)|round(1) %}
+                        {% if b.total > 0 and max_month_total > 0 %}
+                            {% set bar_h = ((b.total / max_month_total) * chart_h)|round(1) %}
+                            <rect x="{{ x }}" y="{{ baseline_y - bar_h }}"
+                                  width="{{ bar_w }}" height="{{ bar_h }}"
+                                  rx="2"
+                                  class="analytics-chart-bar{% if b.is_current %} analytics-chart-bar--current{% endif %}" />
+                        {% else %}
+                            <rect x="{{ label_x }}" y="{{ baseline_y - 4 }}"
+                                  width="1" height="4"
+                                  class="analytics-chart-bar analytics-chart-bar--zero" />
+                        {% endif %}
+                        <text x="{{ label_x }}" y="216"
+                              text-anchor="middle"
+                              class="analytics-chart-label{% if b.is_current %} analytics-chart-label--current{% endif %}">{{ b.label }}</text>
+                    {% endfor %}
+                    <line x1="0" y1="{{ baseline_y }}" x2="600" y2="{{ baseline_y }}"
+                          class="analytics-chart-baseline" />
+                </svg>
+            </div>
+        </section>
+
+        {# 6. Category breakdown — reuses the .profile-category-list /
+           .profile-category-fill--<bar_class> visual from /profile so users
+           recognise it. High → low by total. #}
+        <section class="profile-card">
+            <h2 class="profile-card-title">By category</h2>
+            {% if category_breakdown %}
+                <ul class="profile-category-list">
+                    {% for c in category_breakdown %}
+                        <li class="profile-category-row">
+                            <div class="profile-category-head">
+                                <span class="category-badge category-badge--{{ c.bar_class }}">
+                                    {{ c.category }}
+                                </span>
+                                <span class="profile-category-total">
+                                    ₹{{ "{:,.2f}".format(c.total) }} · {{ c.count }} txn · {{ (c.share * 100)|round|int }}%
+                                </span>
+                            </div>
+                            <div class="profile-category-track" aria-hidden="true">
+                                <div class="profile-category-fill profile-category-fill--{{ c.bar_class }}"
+                                     style="width: {{ (c.share * 100)|round(2) }}%"></div>
+                            </div>
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <p class="analytics-card-sub">No category data in this period.</p>
+            {% endif %}
+        </section>
+
+        {# 7. Day-of-week breakdown — Monday → Sunday, average spend per
+           weekday across the trailing 12 months. The peak weekday (highest
+           average) gets .analytics-day-row--peak so the user's biggest-
+           spending day pops out at a glance. #}
+        <section class="profile-card">
+            <h2 class="profile-card-title">By day of week</h2>
+            <p class="analytics-card-sub">Average spend per weekday across the last 12 months</p>
+            {% set max_day_avg = day_breakdown|map(attribute='average')|max %}
+            <ul class="profile-category-list analytics-day-list">
+                {% for d in day_breakdown %}
+                    {% set is_peak = (loop.index0 == peak_weekday) %}
+                    <li class="profile-category-row{% if is_peak %} analytics-day-row--peak{% endif %}">
+                        <div class="profile-category-head">
+                            <span class="analytics-day-label">{{ d.label }}</span>
+                            <span class="profile-category-total">
+                                ₹{{ "{:,.2f}".format(d.average) }} avg · {{ d.weeks }} wk
+                            </span>
+                        </div>
+                        <div class="profile-category-track" aria-hidden="true">
+                            <div class="profile-category-fill profile-category-fill--food"
+                                 style="width: {% if max_day_avg > 0 %}{{ ((d.average / max_day_avg) * 100)|round(2) }}{% else %}0{% endif %}%"></div>
+                        </div>
+                    </li>
+                {% endfor %}
+            </ul>
+        </section>
+
+    {% endif %}
+
 </section>
 
 {% endblock %}

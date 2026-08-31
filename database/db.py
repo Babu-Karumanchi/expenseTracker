@@ -197,6 +197,32 @@ def get_user_expenses(user_id, date_from=None, date_to=None):
         conn.close()
 
 
+def get_user_expenses_for_analytics(user_id, date_from):
+    """List expenses for a user, oldest first. Returns [] if none.
+
+    Sort order is `date ASC, id ASC` so the chart can iterate oldest → newest
+    without an in-Python resort. Single lower bound (no upper bound) — used
+    by `/analytics` to read the trailing-12-month window even when the user
+    picks the "All Time" preset.
+
+    `date_from` is an inclusive ISO `YYYY-MM-DD` string. The route is
+    responsible for any upper-bound filtering (e.g. narrowing by preset);
+    this helper deliberately has no `date_to` so callers can't accidentally
+    pass a sentinel like "9999-12-31" and trip an SQL-string concat bug.
+    """
+    conn = get_db()
+    try:
+        return conn.execute(
+            "SELECT id, user_id, amount, category, date, description "
+            "FROM expenses "
+            "WHERE user_id = ? AND date >= ? "
+            "ORDER BY date ASC, id ASC",
+            (user_id, date_from),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
 def get_user_stats(user_id, date_from=None, date_to=None):
     """Aggregate stats for a user's profile page.
 
