@@ -24,6 +24,8 @@ from database.db import (
     get_expense_by_id,
     update_expense,
     delete_expense as delete_expense_row,
+    update_user,
+    delete_user,
     verify_password,
 )
 
@@ -249,6 +251,7 @@ PRESETS = [
     {"id": "this_month",     "label": "This Month"},
     {"id": "last_3_months",  "label": "Last 3 Months"},
     {"id": "last_6_months",  "label": "Last 6 Months"},
+    {"id": "last_12_months", "label": "Last 12 Months"},
 ]
 
 
@@ -619,10 +622,11 @@ def analytics():
         "this_month":    (today.replace(day=1).isoformat(), today.isoformat()),
         "last_3_months": (_add_months(today, -3).isoformat(), today.isoformat()),
         "last_6_months": (_add_months(today, -6).isoformat(), today.isoformat()),
+        "last_12_months": (_add_months(today, -12).isoformat(), today.isoformat()),
     }
     valid_preset_ids = {"all_time"} | set(preset_bounds.keys())
     if preset_id not in valid_preset_ids:
-        preset_id = "all_time"
+        preset_id = "last_12_months"
     active_preset = preset_id
 
     if preset_id == "all_time":
@@ -648,15 +652,41 @@ def analytics():
         "top_category_total": stats["top_category_total"],
     }
 
-    # Trailing-12-month chart window. Fixed at 12 months ending today —
-    # NOT narrowed by the preset (see docstring).
-    chart_first = _add_months(today.replace(day=1), -11)
-    month_dates = [_add_months(chart_first, i) for i in range(12)]
-    month_keys = [(d.year, d.month) for d in month_dates]
-    month_keys_set = set(month_keys)
-    chart_start_iso = chart_first.isoformat()
+    # Chart window calculation based on preset
+    if preset_id == "this_month":
+        num_months = 1
+    elif preset_id == "last_3_months":
+        num_months = 3
+    elif preset_id == "last_6_months":
+        num_months = 6
+    elif preset_id == "all_time":
+        num_months = None
+    else:
+        num_months = 12
 
-    rows = get_user_expenses_for_analytics(session["user_id"], chart_start_iso)
+    if num_months:
+        chart_first = _add_months(today.replace(day=1), -(num_months - 1))
+        month_dates = [_add_months(chart_first, i) for i in range(num_months)]
+        month_keys = [(d.year, d.month) for d in month_dates]
+        chart_start_iso = chart_first.isoformat()
+        month_keys_set = set(month_keys)
+        rows = get_user_expenses_for_analytics(session["user_id"], chart_start_iso)
+    else:
+        # All time: fetch all and determine range from earliest expense
+        rows = get_user_expenses_for_analytics(session["user_id"], None)
+        if not rows:
+            chart_first = today.replace(day=1)
+            month_dates = [chart_first]
+        else:
+            earliest_date = date.fromisoformat(rows[0]["date"])
+            chart_first = earliest_date.replace(day=1)
+            diff = (today.year - chart_first.year) * 12 + (today.month - chart_first.month) + 1
+            month_dates = [_add_months(chart_first, i) for i in range(diff)]
+
+        month_keys = [(d.year, d.month) for d in month_dates]
+        chart_start_iso = chart_first.isoformat()
+        month_keys_set = set(month_keys)
+
 
     # Monthly buckets — total spend per calendar month, oldest → newest.
     totals_by_month = defaultdict(float)
@@ -1139,6 +1169,100 @@ def delete_expense(id):
 # Database initialization                                              #
 # ------------------------------------------------------------------ #
 
+
+@app.route("/profile/edit", methods=["GET", "POST"])
+def edit_profile():
+    """Render and process the profile edit form for the signed-in user.
+    
+    Auth guard: signed-out users redirect to /login.
+    
+    GET fetches the current user's data to pre-fill the form.
+    
+    POST validates:
+        1. name — cannot be empty.
+        2. email — must match the standard email regex.
+    
+    On success, updates the user in the DB and redirects to /profile.
+    Handles sqlite3.IntegrityError if the updated email is already taken.
+    """
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    user_row = get_user_by_id(session["user_id"])
+    if user_row is None:
+        session.clear()
+        return redirect(url_for("login"))
+
+    if request.method == "GET":
+        return render_template(
+            "edit_profile.html",
+            name=user_row["name"],
+            email=user_row["email"],
+        )
+
+    # POST: CSRF check.
+    csrf_error = _verify_csrf()
+    if csrf_error is not None:
+        return csrf_error
+
+    name = (request.form.get("name") or "").strip()
+    email = (request.form.get("email") or "").strip()
+
+    if not name:
+        return render_template(
+            "edit_profile.html",
+            error="Please enter your name.",
+            name=name,
+            email=email,
+        )
+    if not re.fullmatch(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return render_template(
+            "edit_profile.html",
+            error="Please enter a valid email address.",
+            name=name,
+            email=email,
+        )
+
+    try:
+        update_user(session["user_id"], name, email)
+        # Update session name to reflect change immediately
+        session["user_name"] = name
+    except sqlite3.IntegrityError:
+        return render_template(
+            "edit_profile.html",
+            error="An account with that email already exists.",
+            name=name,
+            email=email,
+        )
+
+    return redirect(url_for("profile"))
+
+
+@app.route("/profile/delete", methods=["GET", "POST"])
+def delete_profile():
+    """Render and process the profile deletion confirmation.
+    
+    Auth guard: signed-out users redirect to /login.
+    
+    GET renders the confirmation page.
+    
+    POST verifies CSRF, deletes the user and all their expenses,
+    clears the session, and redirects to the landing page.
+    """
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    if request.method == "GET":
+        return render_template("delete_profile.html")
+
+    # POST: CSRF check.
+    csrf_error = _verify_csrf()
+    if csrf_error is not None:
+        return csrf_error
+
+    delete_user(session["user_id"])
+    session.clear()
+    return redirect(url_for("landing"))
 with app.app_context():
     init_db()
     seed_db()

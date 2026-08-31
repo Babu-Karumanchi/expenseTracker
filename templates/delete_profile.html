@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Delete Account — Spendly{% endblock %}
+
+{% block content %}
+<section class="profile-section">
+    <div class="profile-card delete-profile-card">
+        <h2 class="profile-card-title">Delete Account</h2>
+        <p class="modal-body">Are you sure you want to delete your account? This action is <strong>permanent</strong> and will remove all your recorded expenses.</p>
+
+        <form method="post" action="{{ url_for('delete_profile') }}" class="profile-filter" novalidate>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            
+            <div class="profile-filter-actions">
+                <button type="submit" class="btn-danger">Delete My Account</button>
+                <a class="btn-ghost" href="{{ url_for('profile') }}">Cancel</a>
+            </div>
+        </form>
+    </div>
+</section>
+{% endblock %}
