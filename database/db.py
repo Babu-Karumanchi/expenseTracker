@@ -197,7 +197,7 @@ def get_user_expenses(user_id, date_from=None, date_to=None):
         conn.close()
 
 
-def get_user_expenses_for_analytics(user_id, date_from):
+def get_user_expenses_for_analytics(user_id, date_from=None):
     """List expenses for a user, oldest first. Returns [] if none.
 
     Sort order is `date ASC, id ASC` so the chart can iterate oldest → newest
@@ -212,13 +212,18 @@ def get_user_expenses_for_analytics(user_id, date_from):
     """
     conn = get_db()
     try:
-        return conn.execute(
+        conditions = ["user_id = ?"]
+        params = [user_id]
+        if date_from:
+            conditions.append("date >= ?")
+            params.append(date_from)
+        sql = (
             "SELECT id, user_id, amount, category, date, description "
             "FROM expenses "
-            "WHERE user_id = ? AND date >= ? "
-            "ORDER BY date ASC, id ASC",
-            (user_id, date_from),
-        ).fetchall()
+            "WHERE " + " AND ".join(conditions) + " "
+            "ORDER BY date ASC, id ASC"
+        )
+        return conn.execute(sql, tuple(params)).fetchall()
     finally:
         conn.close()
 
@@ -347,6 +352,40 @@ def delete_expense(expense_id, user_id):
             "DELETE FROM expenses WHERE id = ? AND user_id = ?",
             (expense_id, user_id),
         )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+def update_user(user_id, name, email):
+    """Update user's name and email. Returns rowcount.
+    
+    Lets sqlite3.IntegrityError (duplicate email) propagate to the caller.
+    """
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "UPDATE users SET name = ?, email = ? WHERE id = ?",
+            (name, email, user_id),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def delete_user(user_id):
+    """Permanently delete a user and all their associated expenses.
+    
+    Since the schema doesn't use ON DELETE CASCADE, we manually clear
+    expenses first to avoid foreign key violations.
+    """
+    conn = get_db()
+    try:
+        # Delete expenses first
+        conn.execute("DELETE FROM expenses WHERE user_id = ?", (user_id,))
+        # Delete the user
+        cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         conn.commit()
         return cur.rowcount
     finally:

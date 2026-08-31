@@ -19,7 +19,8 @@
         <div class="profile-info-actions">
             <a href="{{ url_for('add_expense') }}" class="btn-primary"
                data-open-modal="add-expense-modal">+ Add expense</a>
-            <button type="button" class="btn-ghost" disabled title="Edit profile — coming in Step 5">Edit profile</button>
+            <a href="{{ url_for('edit_profile') }}" class="btn-ghost">Edit profile</a>
+            <a href="{{ url_for('delete_profile') }}" class="btn-ghost btn-danger">Delete profile</a>
         </div>
     </div>
 
