@@ -34,6 +34,8 @@ No database changes. The existing `expenses` table (`database/db.py:19-28`) alre
   - Add one new helper (kept in `db.py` per the "no DB logic in routes" rule):
     - `filter_user_expenses(user_id, date_from=None, date_to=None)` — a thin coordinator that calls `get_user_expenses` with the bounds and returns the list. (Optional — implementations may call `get_user_expenses` directly from the route instead. Either is acceptable; the helper is preferred when the route would otherwise reproduce the same argument plumbing.)
   - **Backwards compatibility:** every existing call site of `get_user_expenses` / `get_user_stats` is called with no extra arguments, so the spec'd default of `None` keeps Step 5 unbroken.
+
+**Note:** As of Step 10, the same `?preset=...` query parameter is also consumed by `/analytics` to narrow the KPI strip and the category + day-of-week breakdowns on the analytics dashboard. The trailing-12-month bar chart on `/analytics` is **always** 12 months regardless of preset. The pill row markup on `/analytics` mirrors the one defined in this spec. See `.claude/specs/10-analytics-page.md` for the dashboard-side details.
 - `app.py` — rewrite the body of the `profile()` view (`app.py:155-256`):
   - Read `request.args.get("from", "").strip()` and `request.args.get("to", "").strip()` into local strings. Empty string → `None` for the DB helper.
   - **Validate** the inputs (cheap, route-level — not DB level):

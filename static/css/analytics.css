@@ -1,22 +1,32 @@
-/* Analytics coming-soon page — page-specific styles.
-   Reuses tokens from style.css :root for color/type/radius. */
+/* Analytics dashboard — page-specific styles.
+   Reuses tokens from style.css :root for color / type / radius.
+   The KPI cards, preset pills, category list, and bars all reuse the
+   .profile-* classes from style.css; this file adds the layout,
+   chart, day-of-week, and empty-state overrides only. */
 
-.analytics-section {
-    max-width: 560px;
+/* ------------------------------------------------------------------ */
+/* Dashboard shell                                                     */
+/* ------------------------------------------------------------------ */
+
+.analytics-dashboard {
+    max-width: var(--max-width);
     margin: 0 auto;
-    padding: 4rem 2rem 5rem;
-    min-height: calc(100vh - 60px - 100px);
+    padding: 2.5rem 2rem 4rem;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
+    gap: 1.5rem;
+}
+
+.analytics-header {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
 }
 
 .analytics-badge {
     display: inline-block;
     padding: 0.35rem 0.9rem;
-    margin-bottom: 1.5rem;
     background: var(--accent-light);
     color: var(--accent);
     border-radius: 999px;
@@ -31,26 +41,150 @@
     font-size: clamp(1.75rem, 3vw, 2.5rem);
     color: var(--ink);
     letter-spacing: -0.02em;
-    margin: 0 0 1rem;
     line-height: 1.15;
+    margin: 0;
 }
 
 .analytics-subtitle {
     color: var(--ink-muted);
     font-size: 1.05rem;
     line-height: 1.6;
-    margin: 0 0 0.5rem;
-    max-width: 440px;
+    margin: 0;
+    max-width: 540px;
 }
 
-.analytics-meta {
-    color: var(--ink-faint);
-    font-size: 0.9rem;
+/* ------------------------------------------------------------------ */
+/* KPI strip — override the 3-col .profile-stats to 4-col             */
+/* ------------------------------------------------------------------ */
+
+.analytics-kpis {
+    grid-template-columns: repeat(4, 1fr);
+}
+
+@media (max-width: 900px) {
+    .analytics-kpis {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Preset pills — reuse .profile-presets / .profile-pill,             */
+/* just give the row a touch of bottom margin so the chart below      */
+/* has breathing room.                                                */
+/* ------------------------------------------------------------------ */
+
+.analytics-presets {
     margin: 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Monthly trend — inline SVG                                         */
+/* ------------------------------------------------------------------ */
+
+.analytics-chart-card {
+    /* profile-card already provides surface / padding / radius. */
+}
+
+.analytics-card-sub {
+    color: var(--ink-muted);
+    font-size: 0.9rem;
+    margin: -0.5rem 0 1rem;
+}
+
+.analytics-chart {
+    width: 100%;
+    padding: 0.5rem 0 0;
+}
+
+.analytics-chart-svg {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+.analytics-chart-bar {
+    fill: var(--accent-2);
+    transition: opacity .15s ease;
+}
+
+.analytics-chart-bar--current {
+    fill: var(--accent);
+}
+
+.analytics-chart-bar--zero {
+    fill: var(--ink-faint);
+}
+
+.analytics-chart-baseline {
+    stroke: var(--border);
+    stroke-width: 1;
+}
+
+.analytics-chart-label {
+    font-size: 11px;
+    fill: var(--ink-muted);
+    font-family: var(--font-body, sans-serif);
+}
+
+.analytics-chart-label--current {
+    fill: var(--accent);
+    font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ */
+/* Day-of-week list — peak-row highlight                               */
+/* ------------------------------------------------------------------ */
+
+.analytics-day-list {
+    /* Same flex column as .profile-category-list; no override needed. */
+}
+
+.analytics-day-label {
+    font-weight: 500;
+    color: var(--ink);
+}
+
+.analytics-day-row--peak {
+    border-left: 3px solid var(--accent);
+    padding-left: 0.75rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Empty state                                                         */
+/* ------------------------------------------------------------------ */
+
+.analytics-empty {
+    text-align: center;
+    padding: 3rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.analytics-empty-title {
+    font-family: var(--font-display);
+    font-size: 1.5rem;
+    color: var(--ink);
+    margin: 0;
+}
+
+.analytics-empty-copy {
+    color: var(--ink-soft);
+    margin: 0.5rem auto 1.25rem;
+    max-width: 28rem;
+}
+
+.analytics-empty-cta {
+    /* Uses .btn-primary from style.css — no override. */
+}
+
+/* ------------------------------------------------------------------ */
+/* Responsive                                                         */
+/* ------------------------------------------------------------------ */
+
 @media (max-width: 600px) {
-    .analytics-section {
-        padding: 2rem 1.25rem 3rem;
+    .analytics-dashboard {
+        padding: 1.5rem 1.25rem 3rem;
     }
 }

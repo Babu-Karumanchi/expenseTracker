@@ -1,8 +1,10 @@
+import calendar
 import hmac
 import os
 import re
 import secrets
 import sqlite3
+from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
@@ -17,6 +19,7 @@ from database.db import (
     get_user_by_email,
     get_user_by_id,
     get_user_expenses,
+    get_user_expenses_for_analytics,
     get_user_stats,
     get_expense_by_id,
     update_expense,
@@ -589,12 +592,165 @@ def profile():
 
 @app.route("/analytics")
 def analytics():
-    """Render the Analytics coming-soon page. Auth-guarded: logged-out
-    users are redirected to /login before any rendering.
+    """Render the analytics dashboard for the signed-in user.
+
+    Auth guard: an empty session redirects to /login before any DB call.
+    Optional `?preset=` narrows the KPI strip + category + day-of-week
+    breakdowns; the trailing-12-month bar chart is ALWAYS 12 months
+    ending today, regardless of the preset (a 1-bar chart would defeat
+    the purpose of an analytics page). Invalid preset values fall back
+    silently to `all_time` — no 4xx, no error envelope.
+
+    Sections rendered:
+      1. KPI strip (Total spent / Transactions / Average / Top category)
+      2. Preset pill row
+      3. Monthly trend (inline SVG, 12 bars oldest → newest)
+      4. Category breakdown (horizontal bar list, high → low)
+      5. Day-of-week breakdown (Mon → Sun, average per weekday)
+      6. Empty state (replaces sections 3-5 when the user has zero expenses)
     """
     if not session.get("user_id"):
         return redirect(url_for("login"))
-    return render_template("analytics.html")
+
+    today = _today()
+    preset_id = request.args.get("preset", "").strip()
+
+    preset_bounds = {
+        "this_month":    (today.replace(day=1).isoformat(), today.isoformat()),
+        "last_3_months": (_add_months(today, -3).isoformat(), today.isoformat()),
+        "last_6_months": (_add_months(today, -6).isoformat(), today.isoformat()),
+    }
+    valid_preset_ids = {"all_time"} | set(preset_bounds.keys())
+    if preset_id not in valid_preset_ids:
+        preset_id = "all_time"
+    active_preset = preset_id
+
+    if preset_id == "all_time":
+        from_bound, to_bound = None, None
+    else:
+        from_bound, to_bound = preset_bounds[preset_id]
+
+    # KPI strip via the same helper /profile uses — total / count /
+    # top_category / top_category_total all reflect the same preset
+    # window so the values stay consistent across pages.
+    stats = get_user_stats(
+        session["user_id"], date_from=from_bound, date_to=to_bound
+    )
+    if stats["count"] > 0:
+        average = stats["total"] / stats["count"]
+    else:
+        average = 0.0
+    kpis = {
+        "total":              stats["total"],
+        "count":              stats["count"],
+        "average":            average,
+        "top_category":       stats["top_category"],
+        "top_category_total": stats["top_category_total"],
+    }
+
+    # Trailing-12-month chart window. Fixed at 12 months ending today —
+    # NOT narrowed by the preset (see docstring).
+    chart_first = _add_months(today.replace(day=1), -11)
+    month_dates = [_add_months(chart_first, i) for i in range(12)]
+    month_keys = [(d.year, d.month) for d in month_dates]
+    month_keys_set = set(month_keys)
+    chart_start_iso = chart_first.isoformat()
+
+    rows = get_user_expenses_for_analytics(session["user_id"], chart_start_iso)
+
+    # Monthly buckets — total spend per calendar month, oldest → newest.
+    totals_by_month = defaultdict(float)
+    for row in rows:
+        try:
+            d = date.fromisoformat(row["date"])
+        except (ValueError, TypeError):
+            continue  # skip malformed rows silently
+        key = (d.year, d.month)
+        if key in month_keys_set:
+            totals_by_month[key] += float(row["amount"])
+    monthly_buckets = [
+        {
+            "label": calendar.month_abbr[m],
+            "year": y,
+            "month": m,
+            "total": round(totals_by_month.get((y, m), 0.0), 2),
+            "is_current": (y == today.year and m == today.month),
+        }
+        for (y, m) in month_keys
+    ]
+    max_month_total = max((b["total"] for b in monthly_buckets), default=0.0)
+
+    # Category breakdown — totals + counts, high → low.
+    totals_by_cat = defaultdict(float)
+    counts_by_cat = defaultdict(int)
+    for row in rows:
+        totals_by_cat[row["category"]] += float(row["amount"])
+        counts_by_cat[row["category"]] += 1
+    grand_total = sum(totals_by_cat.values())
+    category_breakdown = sorted(
+        [
+            {
+                "category": cat,
+                "total": round(total, 2),
+                "count": counts_by_cat[cat],
+                "share": (total / grand_total) if grand_total else 0.0,
+                "bar_class": cat.lower(),
+            }
+            for cat, total in totals_by_cat.items()
+        ],
+        key=lambda x: -x["total"],
+    )
+
+    # Day-of-week breakdown — Monday → Sunday, average spend per weekday.
+    DAY_LABELS = [
+        "Monday", "Tuesday", "Wednesday", "Thursday",
+        "Friday", "Saturday", "Sunday",
+    ]
+    totals_by_dow = defaultdict(float)
+    weeks_per_dow = defaultdict(set)
+    for row in rows:
+        try:
+            d = date.fromisoformat(row["date"])
+        except (ValueError, TypeError):
+            continue
+        wd = d.weekday()  # Mon=0, Sun=6
+        totals_by_dow[wd] += float(row["amount"])
+        weeks_per_dow[wd].add(d.isocalendar()[:2])
+
+    day_breakdown = []
+    for wd in range(7):
+        weeks = len(weeks_per_dow.get(wd, set()))
+        denominator = max(weeks, 1)  # never divide by zero
+        avg = totals_by_dow.get(wd, 0.0) / denominator
+        day_breakdown.append({
+            "weekday": wd,
+            "label":   DAY_LABELS[wd],
+            "total":   round(totals_by_dow.get(wd, 0.0), 2),
+            "weeks":   weeks,
+            "average": round(avg, 2),
+        })
+
+    # Peak weekday — None when every weekday is zero so no row gets the
+    # --peak highlight and the chart reads as "no data".
+    peak_weekday = None
+    if any(d["average"] > 0 for d in day_breakdown):
+        peak_weekday = max(range(7), key=lambda i: day_breakdown[i]["average"])
+
+    return render_template(
+        "analytics.html",
+        active_preset=active_preset,
+        presets=PRESETS,
+        kpis=kpis,
+        monthly_buckets=monthly_buckets,
+        max_month_total=max_month_total,
+        category_breakdown=category_breakdown,
+        day_breakdown=day_breakdown,
+        peak_weekday=peak_weekday,
+        is_empty=(kpis["count"] == 0),
+        today=today.isoformat(),
+        today_month_label=today.strftime("%B %Y"),
+        CATEGORIES=CATEGORIES,
+    )
 
 
 @app.route("/expenses/add", methods=["GET", "POST"])
