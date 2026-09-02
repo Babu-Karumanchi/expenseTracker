@@ -27,6 +27,8 @@ from database.db import (
     update_user,
     delete_user,
     verify_password,
+    get_budget,
+    set_budget,
 )
 
 app = Flask(__name__)
@@ -411,7 +413,88 @@ def logout():
     return redirect(url_for("landing"))
 
 
+@app.route("/budget", methods=["GET", "POST"])
+def budget():
+    """Render and process the monthly budget management page.
+
+    GET:
+        Calculate current month spend and fetch user's budget to determine
+        spending progress and a visual color class (green/yellow/red).
+
+    POST:
+        Validate the budget amount and update it in the database.
+    """
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    user_id = session["user_id"]
+    today = _today()
+    start_of_month = today.replace(day=1).isoformat()
+
+    if request.method == "POST":
+        csrf_error = _verify_csrf()
+        if csrf_error is not None:
+            return csrf_error
+
+        amount_raw = request.form.get("amount") or ""
+        try:
+            amount_decimal = Decimal(amount_raw)
+            if amount_decimal < AMOUNT_MIN or amount_decimal > AMOUNT_MAX:
+                raise ValueError()
+        except (InvalidOperation, ValueError):
+            # Render with error if amount is invalid
+            # Need to calculate spend and budget first to re-render the page correctly
+            stats = get_user_stats(user_id, date_from=start_of_month)
+            budget_row = get_budget(user_id)
+            budget_amount = budget_row["amount"] if budget_row else 0.0
+
+            # Simple pct for re-render
+            pct = (stats["total"] / budget_amount * 100) if budget_amount > 0 else 0.0
+            color_class = "budget-fill--green"
+            if pct > 90: color_class = "budget-fill--red"
+            elif pct > 70: color_class = "budget-fill--yellow"
+
+            return render_template(
+                "budget.html",
+                current_spend=stats["total"],
+                budget_amount=budget_amount,
+                percentage=pct,
+                color_class=color_class,
+                error="Please enter a valid budget between ₹0.01 and ₹10,00,000.",
+                amount=amount_raw,
+                today=today.isoformat()
+            )
+
+        set_budget(user_id, float(amount_decimal))
+        return redirect(url_for("budget"))
+
+    # GET
+    stats = get_user_stats(user_id, date_from=start_of_month)
+    current_spend = stats["total"]
+
+    budget_row = get_budget(user_id)
+    budget_amount = budget_row["amount"] if budget_row else 0.0
+
+    pct = (current_spend / budget_amount * 100) if budget_amount > 0 else 0.0
+
+    color_class = "budget-fill--green"
+    if pct > 90:
+        color_class = "budget-fill--red"
+    elif pct > 70:
+        color_class = "budget-fill--yellow"
+
+    return render_template(
+        "budget.html",
+        current_spend=current_spend,
+        budget_amount=budget_amount,
+        percentage=pct,
+        color_class=color_class,
+        today=today.isoformat()
+    )
+
+
 @app.route("/profile")
+
 def profile():
     """Render the profile page with live DB data for the signed-in user.
 
@@ -523,10 +606,24 @@ def profile():
         top_category_label = user_stats["top_category"]
         top_category_meta = f"₹{user_stats['top_category_total']:,.2f}"
 
+    # Budget status for stats row
+    today_dt = _today()
+    start_of_month = today_dt.replace(day=1).isoformat()
+    month_stats = get_user_stats(session["user_id"], date_from=start_of_month)
+    current_month_spend = month_stats["total"]
+    budget_row = get_budget(session["user_id"])
+    budget_val = budget_row["amount"] if budget_row else None
+
+    if budget_val is not None:
+        budget_status = f"₹{current_month_spend:,.2f} / ₹{budget_val:,.2f}"
+    else:
+        budget_status = "No budget set"
+
     stats = [
         {"label": "Total spent",  "value": f"₹{user_stats['total']:,.2f}", "meta": member_since},
         {"label": "Transactions", "value": str(user_stats["count"]),      "meta": "this month"},
         {"label": "Top category", "value": top_category_label,            "meta": top_category_meta},
+        {"label": "Budget", "value": budget_status, "meta": "this month"},
     ]
 
     # Transactions list — newest first, mapped from the filtered expense rows.

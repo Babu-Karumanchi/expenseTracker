@@ -26,6 +26,13 @@ CREATE TABLE IF NOT EXISTS expenses (
     created_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
+
+CREATE TABLE IF NOT EXISTS budgets (
+    user_id INTEGER PRIMARY KEY,
+    amount REAL NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
 """
 
 
@@ -376,7 +383,7 @@ def update_user(user_id, name, email):
 
 def delete_user(user_id):
     """Permanently delete a user and all their associated expenses.
-    
+
     Since the schema doesn't use ON DELETE CASCADE, we manually clear
     expenses first to avoid foreign key violations.
     """
@@ -386,6 +393,30 @@ def delete_user(user_id):
         conn.execute("DELETE FROM expenses WHERE user_id = ?", (user_id,))
         # Delete the user
         cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def get_budget(user_id):
+    """Fetch the monthly budget amount for a user. Returns None if not set."""
+    conn = get_db()
+    try:
+        return conn.execute("SELECT amount FROM budgets WHERE user_id = ?", (user_id,)).fetchone()
+    finally:
+        conn.close()
+
+
+def set_budget(user_id, amount):
+    """Set or update the monthly budget for a user. Returns rowcount."""
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "INSERT INTO budgets (user_id, amount) VALUES (?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET amount = ?, updated_at = datetime('now')",
+            (user_id, amount, amount),
+        )
         conn.commit()
         return cur.rowcount
     finally:

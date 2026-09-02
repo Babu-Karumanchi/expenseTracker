@@ -1,0 +1,96 @@
+.budget-section {
+    max-width: 800px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+}
+
+.budget-card {
+    background: var(--card-bg, #fff);
+    padding: 2rem;
+    border-radius: 1rem;
+    box-shadow: var(--shadow-sm, 0 2px 4px rgba(0,0,0,0.05));
+    border: 1px solid var(--border-color, #eee);
+}
+
+.budget-card-title {
+    font-family: var(--font-serif, 'DM Serif Display', serif);
+    font-size: 1.75rem;
+    margin-bottom: 0.5rem;
+    color: var(--text-main, #111);
+}
+
+.budget-card-subtitle {
+    color: var(--text-muted, #666);
+    margin-bottom: 2rem;
+}
+
+.budget-progress-container {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+}
+
+.budget-progress-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.budget-progress-label {
+    font-size: 0.875rem;
+    color: var(--text-muted, #666);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.budget-progress-value {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--text-main, #111);
+}
+
+.budget-track {
+    margin-bottom: 1.5rem;
+}
+
+.budget-status-text {
+    text-align: center;
+    color: var(--text-muted, #666);
+    font-size: 1rem;
+}
+
+.budget-form-title {
+    font-size: 1.25rem;
+    margin-bottom: 1.5rem;
+    color: var(--text-main, #111);
+}
+
+.budget-form-error {
+    background: var(--color-danger-light, #fff5f5);
+    color: var(--color-danger, #e74c3c);
+    padding: 0.75rem;
+    border-radius: 0.5rem;
+    margin-bottom: 1.5rem;
+    font-size: 0.875rem;
+    border: 1px solid var(--color-danger, #e74c3c);
+}
+
+.budget-form-actions {
+    margin-top: 1.5rem;
+    display: flex;
+    justify-content: flex-end;
+}
+
+/* Budget Progress Bar Colors */
+.budget-fill--green {
+    background-color: var(--color-success, #2ecc71) !important;
+}
+
+.budget-fill--yellow {
+    background-color: var(--color-warning, #f1c40f) !important;
+}
+
+.budget-fill--red {
+    background-color: var(--color-danger, #e74c3c) !important;
+}
