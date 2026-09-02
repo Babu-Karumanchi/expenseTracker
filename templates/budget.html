@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Monthly Budget — Spendly{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/budget.css') }}">
+{% endblock %}
+
+{% block content %}
+<section class="budget-section">
+
+    <div class="budget-card">
+        <h2 class="budget-card-title">Monthly Budget</h2>
+        <p class="budget-card-subtitle">Track your spending against your limit for this month.</p>
+
+        <div class="budget-progress-container">
+            <div class="budget-progress-info">
+                <span class="budget-progress-label">Current Spend</span>
+                <span class="budget-progress-value">₹{{ "%.2f"|format(current_spend) }}</span>
+            </div>
+            <div class="budget-progress-info">
+                <span class="budget-progress-label">Monthly Limit</span>
+                <span class="budget-progress-value">₹{{ "%.2f"|format(budget_amount) }}</span>
+            </div>
+        </div>
+
+        <div class="profile-category-track budget-track">
+            <div class="profile-category-fill {{ color_class }} budget-fill"
+                 style="width: {{ percentage }}%"></div>
+        </div>
+
+        <p class="budget-status-text">
+            {% if budget_amount > 0 %}
+                You have spent <strong style="font-weight: 600;">{{ "%.1f"|format(percentage) }}%</strong> of your budget.
+            {% else %}
+                No budget set for this month.
+            {% endif %}
+        </p>
+    </div>
+
+    <div class="budget-card">
+        <h3 class="budget-form-title">Update Budget</h3>
+
+        {% if error %}
+            <p class="budget-form-error" role="alert">{{ error }}</p>
+        {% endif %}
+
+        <form method="post" action="{{ url_for('budget') }}" class="budget-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+            <div class="form-group">
+                <label for="budget-amount" class="form-field-label">Monthly Limit <span class="add-expense-prefix">₹</span></label>
+                <input type="number" name="amount" id="budget-amount"
+                       step="0.01" min="0.01" max="1000000" required
+                       class="form-input form-field-input"
+                       placeholder="5000.00" value="{{ amount if amount else '' }}">
+                <p class="add-expense-hint">Enter your total spending limit for the calendar month.</p>
+            </div>
+
+            <div class="budget-form-actions">
+                <button type="submit" class="btn-submit">Save Budget</button>
+            </div>
+        </form>
+    </div>
+
+</section>
+{% endblock %}
