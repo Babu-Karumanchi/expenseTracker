@@ -33,6 +33,26 @@ CREATE TABLE IF NOT EXISTS budgets (
     updated_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
+
+CREATE TABLE IF NOT EXISTS income (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    amount REAL NOT NULL,
+    source TEXT NOT NULL,
+    category TEXT,
+    date TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS savings_goals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    goal_name TEXT NOT NULL,
+    target_amount REAL NOT NULL,
+    current_amount REAL DEFAULT 0.0,
+    deadline TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
 """
 
 
@@ -285,8 +305,8 @@ def get_expense_by_id(expense_id, user_id):
     """Fetch a single expense row by id, owner-scoped. Returns None if not found.
 
     Scopes the query with `AND user_id = ?` so the row is only returned when
-    BOTH the id exists AND it belongs to `user_id`. A miss covers both
-    "doesn't exist" and "belongs to a different user" so the caller can
+    BOTH the id exists AND it belongs to `user_id`. A miss covers both "doesn't exist"
+    and "belongs to a different user" so the caller can
     `abort(404)` uniformly without leaking which ids are in use.
 
     Returns a `sqlite3.Row` keyed by column name so the route can index by
@@ -364,9 +384,10 @@ def delete_expense(expense_id, user_id):
     finally:
         conn.close()
 
+
 def update_user(user_id, name, email):
     """Update user's name and email. Returns rowcount.
-    
+
     Lets sqlite3.IntegrityError (duplicate email) propagate to the caller.
     """
     conn = get_db()
@@ -419,5 +440,215 @@ def set_budget(user_id, amount):
         )
         conn.commit()
         return cur.rowcount
+    finally:
+        conn.close()
+
+
+# --- Income Helpers ---
+
+def create_income(user_id, amount, source, category, date):
+    """Insert a new income record for a user. Returns the new income id."""
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "INSERT INTO income (user_id, amount, source, category, date) VALUES (?, ?, ?, ?, ?)",
+            (user_id, amount, source, category, date),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def get_user_income(user_id, date_from=None, date_to=None):
+    """List income for a user, newest first. Returns [] if none."""
+    conn = get_db()
+    try:
+        conditions = ["user_id = ?"]
+        params = [user_id]
+        if date_from:
+            conditions.append("date >= ?")
+            params.append(date_from)
+        if date_to:
+            conditions.append("date <= ?")
+            params.append(date_to)
+        sql = (
+            "SELECT id, user_id, amount, source, category, date "
+            "FROM income "
+            "WHERE " + " AND ".join(conditions) + " "
+            "ORDER BY date DESC, id DESC"
+        )
+        return conn.execute(sql, tuple(params)).fetchall()
+    finally:
+        conn.close()
+
+
+def get_income_by_id(income_id, user_id):
+    """Fetch a single income row by id, owner-scoped. Returns None if not found."""
+    conn = get_db()
+    try:
+        return conn.execute(
+            "SELECT id, user_id, amount, source, category, date "
+            "FROM income "
+            "WHERE id = ? AND user_id = ?",
+            (income_id, user_id),
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def update_income(income_id, user_id, amount, source, category, date):
+    """Update an existing income row, owner-scoped. Returns rowcount."""
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "UPDATE income SET amount = ?, source = ?, category = ?, date = ? "
+            "WHERE id = ? AND user_id = ?",
+            (amount, source, category, date, income_id, user_id),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def delete_income(income_id, user_id):
+    """Delete an income row, owner-scoped. Returns rowcount."""
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "DELETE FROM income WHERE id = ? AND user_id = ?",
+            (income_id, user_id),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+# --- Savings Helpers ---
+
+def create_savings_goal(user_id, goal_name, target_amount, deadline):
+    """Create a new savings goal for a user. Returns the goal id."""
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "INSERT INTO savings_goals (user_id, goal_name, target_amount, deadline) VALUES (?, ?, ?, ?)",
+            (user_id, goal_name, target_amount, deadline),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def get_user_savings_goals(user_id):
+    """List all savings goals for a user."""
+    conn = get_db()
+    try:
+        return conn.execute(
+            "SELECT id, user_id, goal_name, target_amount, current_amount, deadline "
+            "FROM savings_goals WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def get_savings_goal_by_id(goal_id, user_id):
+    """Fetch a single savings goal row by id, owner-scoped. Returns None if not found."""
+    conn = get_db()
+    try:
+        return conn.execute(
+            "SELECT id, user_id, goal_name, target_amount, current_amount, deadline "
+            "FROM savings_goals WHERE id = ? AND user_id = ?",
+            (goal_id, user_id),
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def add_funds_to_goal(goal_id, user_id, amount):
+    """Add funds to a specific savings goal, owner-scoped. Returns rowcount."""
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "UPDATE savings_goals SET current_amount = current_amount + ? "
+            "WHERE id = ? AND user_id = ?",
+            (amount, goal_id, user_id),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def delete_savings_goal(goal_id, user_id):
+    """Delete a savings goal, owner-scoped. Returns rowcount."""
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "DELETE FROM savings_goals WHERE id = ? AND user_id = ?",
+            (goal_id, user_id),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+# --- Aggregate Helpers ---
+
+def get_user_financial_summary(user_id, date_from=None, date_to=None):
+    """
+    Calculate aggregated totals for income and expenses over a window.
+    Returns a dict with:
+      - total_income (float)
+      - total_expenses (float)
+      - total_savings_goals (float) - all-time sum of goal current_amounts
+    """
+    conn = get_db()
+    try:
+        # Windowed income
+        inc_conditions = ["user_id = ?"]
+        inc_params = [user_id]
+        if date_from:
+            inc_conditions.append("date >= ?")
+            inc_params.append(date_from)
+        if date_to:
+            inc_conditions.append("date <= ?")
+            inc_params.append(date_to)
+
+        inc_row = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0.0) AS total FROM income WHERE " + " AND ".join(inc_conditions),
+            tuple(inc_params),
+        ).fetchone()
+
+        # Windowed expenses
+        exp_conditions = ["user_id = ?"]
+        exp_params = [user_id]
+        if date_from:
+            exp_conditions.append("date >= ?")
+            exp_params.append(date_from)
+        if date_to:
+            exp_conditions.append("date <= ?")
+            exp_params.append(date_to)
+
+        exp_row = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0.0) AS total FROM expenses WHERE " + " AND ".join(exp_conditions),
+            tuple(exp_params),
+        ).fetchone()
+
+        # All-time savings goals balance
+        sav_row = conn.execute(
+            "SELECT COALESCE(SUM(current_amount), 0.0) AS total FROM savings_goals WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+
+        return {
+            "total_income": float(inc_row["total"]),
+            "total_expenses": float(exp_row["total"]),
+            "total_savings_goals": float(sav_row["total"]),
+        }
     finally:
         conn.close()

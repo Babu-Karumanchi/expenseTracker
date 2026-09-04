@@ -29,6 +29,17 @@ from database.db import (
     verify_password,
     get_budget,
     set_budget,
+    create_income,
+    get_user_income,
+    get_income_by_id,
+    update_income,
+    delete_income as delete_income_row,
+    create_savings_goal,
+    get_user_savings_goals,
+    get_savings_goal_by_id,
+    add_funds_to_goal,
+    delete_savings_goal as delete_savings_goal_row,
+    get_user_financial_summary,
 )
 
 app = Flask(__name__)
@@ -47,6 +58,7 @@ CATEGORIES = [
     "Health",
     "Entertainment",
     "Shopping",
+    "Income",
     "Other",
 ]
 
@@ -493,6 +505,235 @@ def budget():
     )
 
 
+@app.route("/income")
+def list_income():
+    """List all income records for the signed-in user."""
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    income_list = get_user_income(session["user_id"])
+    return render_template("income_list.html", income_list=income_list)
+
+
+@app.route("/income/add", methods=["GET", "POST"])
+def add_income():
+    """Render and process the add-income form."""
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    today = _today().isoformat()
+
+    if request.method == "GET":
+        return render_template(
+            "income_form.html",
+            today=today,
+            CATEGORIES=CATEGORIES,
+        )
+
+    csrf_error = _verify_csrf()
+    if csrf_error is not None:
+        return csrf_error
+
+    amount_raw = request.form.get("amount") or ""
+    source = (request.form.get("source") or "").strip()
+    category = (request.form.get("category") or "").strip()
+    date_raw = request.form.get("date") or ""
+
+    if amount_raw == "":
+        return render_template("income_form.html", error="Please enter an amount.", today=today, amount=amount_raw, source=source, category=category, date=date_raw, CATEGORIES=CATEGORIES)
+    try:
+        amount_decimal = Decimal(amount_raw)
+        if amount_decimal < AMOUNT_MIN or amount_decimal > AMOUNT_MAX:
+            raise ValueError()
+    except (InvalidOperation, ValueError):
+        return render_template("income_form.html", error=AMOUNT_RANGE_ERROR, today=today, amount=amount_raw, source=source, category=category, date=date_raw, CATEGORIES=CATEGORIES)
+
+    if not source:
+        return render_template("income_form.html", error="Please enter a source.", today=today, amount=amount_raw, source=source, category=category, date=date_raw, CATEGORIES=CATEGORIES)
+
+    if not DATE_RE.fullmatch(date_raw):
+        return render_template("income_form.html", error="Please enter a valid date.", today=today, amount=amount_raw, source=source, category=category, date=date_raw, CATEGORIES=CATEGORIES)
+    try:
+        parsed_date = date.fromisoformat(date_raw)
+    except ValueError:
+        return render_template("income_form.html", error="Please enter a valid date.", today=today, amount=amount_raw, source=source, category=category, date=date_raw, CATEGORIES=CATEGORIES)
+
+    create_income(
+        session["user_id"],
+        float(amount_decimal),
+        source,
+        category,
+        parsed_date.isoformat(),
+    )
+    return redirect(url_for("list_income"))
+
+
+@app.route("/income/<int:id>/edit", methods=["GET", "POST"])
+def edit_income(id):
+    """Render and process the edit-income form."""
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    income = get_income_by_id(id, session["user_id"])
+    if income is None:
+        abort(404)
+
+    today = _today().isoformat()
+
+    if request.method == "GET":
+        return render_template(
+            "income_form.html",
+            income=income,
+            today=today,
+            CATEGORIES=CATEGORIES,
+        )
+
+    csrf_error = _verify_csrf()
+    if csrf_error is not None:
+        return csrf_error
+
+    amount_raw = request.form.get("amount") or ""
+    source = (request.form.get("source") or "").strip()
+    category = (request.form.get("category") or "").strip()
+    date_raw = request.form.get("date") or ""
+
+    if amount_raw == "":
+        return render_template("income_form.html", error="Please enter an amount.", income=income, today=today, amount=amount_raw, source=source, category=category, date=date_raw, CATEGORIES=CATEGORIES)
+    try:
+        amount_decimal = Decimal(amount_raw)
+        if amount_decimal < AMOUNT_MIN or amount_decimal > AMOUNT_MAX:
+            raise ValueError()
+    except (InvalidOperation, ValueError):
+        return render_template("income_form.html", error=AMOUNT_RANGE_ERROR, income=income, today=today, amount=amount_raw, source=source, category=category, date=date_raw, CATEGORIES=CATEGORIES)
+
+    if not source:
+        return render_template("income_form.html", error="Please enter a source.", income=income, today=today, amount=amount_raw, source=source, category=category, date=date_raw, CATEGORIES=CATEGORIES)
+
+    if not DATE_RE.fullmatch(date_raw):
+        return render_template("income_form.html", error="Please enter a valid date.", income=income, today=today, amount=amount_raw, source=source, category=category, date=date_raw, CATEGORIES=CATEGORIES)
+    try:
+        parsed_date = date.fromisoformat(date_raw)
+    except ValueError:
+        return render_template("income_form.html", error="Please enter a valid date.", income=income, today=today, amount=amount_raw, source=source, category=category, date=date_raw, CATEGORIES=CATEGORIES)
+
+    update_income(
+        id,
+        session["user_id"],
+        float(amount_decimal),
+        source,
+        category,
+        parsed_date.isoformat(),
+    )
+    return redirect(url_for("list_income"))
+
+
+@app.route("/income/<int:id>/delete", methods=["POST"])
+def delete_income(id):
+    """Delete an income record, owner-scoped."""
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    csrf_error = _verify_csrf()
+    if csrf_error is not None:
+        return csrf_error
+
+    income = get_income_by_id(id, session["user_id"])
+    if income is None:
+        abort(404)
+
+    delete_income_row(id, session["user_id"])
+    return redirect(url_for("list_income"))
+
+
+@app.route("/savings")
+def list_savings():
+    """List all savings goals for the signed-in user."""
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    goals = get_user_savings_goals(session["user_id"])
+    return render_template("savings_list.html", goals=goals)
+
+
+@app.route("/savings/add", methods=["GET", "POST"])
+def add_savings():
+    """Render and process the create-savings-goal form."""
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    if request.method == "GET":
+        return render_template("savings_form.html")
+
+    csrf_error = _verify_csrf()
+    if csrf_error is not None:
+        return csrf_error
+
+    goal_name = (request.form.get("goal_name") or "").strip()
+    target_raw = request.form.get("target_amount") or ""
+    deadline = request.form.get("deadline") or ""
+
+    if not goal_name:
+        return render_template("savings_form.html", error="Please enter a goal name.", goal_name=goal_name)
+    try:
+        target_decimal = Decimal(target_raw)
+        if target_decimal < AMOUNT_MIN or target_decimal > AMOUNT_MAX:
+            raise ValueError()
+    except (InvalidOperation, ValueError):
+        return render_template("savings_form.html", error=AMOUNT_RANGE_ERROR, goal_name=goal_name)
+
+    create_savings_goal(
+        session["user_id"],
+        goal_name,
+        float(target_decimal),
+        deadline,
+    )
+    return redirect(url_for("list_savings"))
+
+
+@app.route("/savings/<int:id>/add", methods=["POST"])
+def add_savings_funds(id):
+    """Add funds to a specific savings goal, owner-scoped."""
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    csrf_error = _verify_csrf()
+    if csrf_error is not None:
+        return csrf_error
+
+    goal = get_savings_goal_by_id(id, session["user_id"])
+    if goal is None:
+        abort(404)
+
+    amount_raw = request.form.get("amount") or ""
+    try:
+        amount_decimal = Decimal(amount_raw)
+        if amount_decimal < AMOUNT_MIN or amount_decimal > AMOUNT_MAX:
+            raise ValueError()
+    except (InvalidOperation, ValueError):
+        return redirect(url_for("list_savings")) # Simplified error handling for this inline form
+
+    add_funds_to_goal(id, session["user_id"], float(amount_decimal))
+    return redirect(url_for("list_savings"))
+
+
+@app.route("/savings/<int:id>/delete", methods=["POST"])
+def delete_savings(id):
+    """Delete a savings goal, owner-scoped."""
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    csrf_error = _verify_csrf()
+    if csrf_error is not None:
+        return csrf_error
+
+    goal = get_savings_goal_by_id(id, session["user_id"])
+    if goal is None:
+        abort(404)
+
+    delete_savings_goal_row(id, session["user_id"])
+    return redirect(url_for("list_savings"))
+
+
 @app.route("/profile")
 
 def profile():
@@ -599,6 +840,15 @@ def profile():
     user_stats = get_user_stats(
         session["user_id"], date_from=from_bound, date_to=to_bound
     )
+
+    # All-time financial summary for net balance calculation
+    lifetime_financials = get_user_financial_summary(session["user_id"])
+    net_balance = (
+        lifetime_financials["total_income"]
+        - lifetime_financials["total_expenses"]
+        - lifetime_financials["total_savings_goals"]
+    )
+
     if user_stats["top_category"] is None:
         top_category_label = "—"
         top_category_meta = "—"
@@ -624,7 +874,9 @@ def profile():
         {"label": "Transactions", "value": str(user_stats["count"]),      "meta": "this month"},
         {"label": "Top category", "value": top_category_label,            "meta": top_category_meta},
         {"label": "Budget", "value": budget_status, "meta": "this month"},
+        {"label": "Net Balance", "value": f"₹{net_balance:,.2f}", "meta": "all-time"},
     ]
+
 
     # Transactions list — newest first, mapped from the filtered expense rows.
     expense_rows = get_user_expenses(
@@ -737,6 +989,7 @@ def analytics():
     stats = get_user_stats(
         session["user_id"], date_from=from_bound, date_to=to_bound
     )
+
     if stats["count"] > 0:
         average = stats["total"] / stats["count"]
     else:
@@ -748,6 +1001,7 @@ def analytics():
         "top_category":       stats["top_category"],
         "top_category_total": stats["top_category_total"],
     }
+
 
     # Chart window calculation based on preset
     if preset_id == "this_month":
@@ -878,6 +1132,7 @@ def analytics():
         today_month_label=today.strftime("%B %Y"),
         CATEGORIES=CATEGORIES,
     )
+
 
 
 @app.route("/expenses/add", methods=["GET", "POST"])

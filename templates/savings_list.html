@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block title %}Savings Goals — Spendly{% endblock %}
+
+{% block head %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/income_savings.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="income-savings-container">
+    <header class="income-savings-header">
+        <div>
+            <h1 class="profile-name">Savings Goals</h1>
+            <p class="profile-email">Track your progress toward future goals</p>
+        </div>
+        <a href="{{ url_for('add_savings') }}" class="btn-primary">+ Create Goal</a>
+    </header>
+
+    <div class="income-savings-card">
+        {% if goals %}
+            {% for goal in goals %}
+            <div class="savings-goal-row">
+                <div class="savings-goal-head">
+                    <span class="savings-goal-name">{{ goal.goal_name }}</span>
+                    <span class="savings-goal-amount">₹{{ "{:,.2f}".format(goal.current_amount) }} / ₹{{ "{:,.2f}".format(goal.target_amount) }}</span>
+                </div>
+                <div class="savings-progress-track">
+                    {% set pct = (goal.current_amount / goal.target_amount * 100) if goal.target_amount > 0 else 0 %}
+                    <div class="savings-progress-fill" style="width: {{ pct if pct <= 100 else 100 }}%"></div>
+                </div>
+                <div class="savings-progress-meta">
+                    <span>{{ pct|round(1) }}% complete</span>
+                    <span>Deadline: {{ goal.deadline or 'No deadline' }}</span>
+                </div>
+
+                <div style="margin-top: 1rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
+                    <form method="post" action="{{ url_for('add_savings_funds', id=goal.id) }}" style="display:flex; gap:0.5rem;">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="number" name="amount" step="0.01" min="0.01" placeholder="Add amount" required
+                               style="width: 120px; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border-color);">
+                        <button type="submit" class="btn-primary" style="padding: 4px 12px; font-size: 0.85rem;">Add Funds</button>
+                    </form>
+                    <form method="post" action="{{ url_for('delete_savings', id=goal.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn-ghost btn-danger" style="padding: 4px 12px; font-size: 0.85rem;">Delete</button>
+                    </form>
+                </div>
+            </div>
+            {% if not loop.last %}<hr style="border: 0; border-top: 1px solid var(--border-color); margin: 1.5rem 0;">{% endif %}
+            {% endfor %}
+        {% else %}
+            <div style="text-align:center; padding: 2rem; color: var(--text-muted);">
+                No savings goals found. Start by creating your first goal.
+            </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

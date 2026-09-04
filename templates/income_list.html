@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}Income — Spendly{% endblock %}
+
+{% block head %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/income_savings.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="income-savings-container">
+    <header class="income-savings-header">
+        <div>
+            <h1 class="profile-name">Income</h1>
+            <p class="profile-email">Manage your earnings and income sources</p>
+        </div>
+        <a href="{{ url_for('add_income') }}" class="btn-primary">+ Add Income</a>
+    </header>
+
+    <div class="income-savings-card">
+        <div class="profile-table-wrap">
+            <table class="profile-table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Source</th>
+                        <th>Category</th>
+                        <th class="profile-table-num">Amount</th>
+                        <th class="profile-table-actions-col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in income_list %}
+                    <tr>
+                        <td>{{ item.date }}</td>
+                        <td>{{ item.source }}</td>
+                        <td>
+                            <span class="category-badge category-badge--{{ item.category|lower if item.category else 'other' }}">
+                                {{ item.category or 'Other' }}
+                            </span>
+                        </td>
+                        <td class="profile-table-num">₹{{ "{:,.2f}".format(item.amount) }}</td>
+                        <td class="profile-table-actions">
+                            <a class="profile-table-edit-link" href="{{ url_for('edit_income', id=item.id) }}">Edit</a>
+                            <form action="{{ url_for('delete_income', id=item.id) }}" method="post" style="display:inline;">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="profile-table-delete-link" style="background:none; border:none; color:var(--text-danger); cursor:pointer; padding:0; font-size:inherit;">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" style="text-align:center; padding: 2rem; color: var(--text-muted);">
+                            No income records found. Start by adding your first source of income.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
