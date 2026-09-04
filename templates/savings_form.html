@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Create Savings Goal — Spendly{% endblock %}
+
+{% block head %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/income_savings.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="income-savings-container">
+    <header class="income-savings-header">
+        <div>
+            <h1 class="profile-name">Create Savings Goal</h1>
+            <p class="profile-email">Set a target and track your progress</p>
+        </div>
+        <a href="{{ url_for('list_savings') }}" class="btn-ghost">Back to goals</a>
+    </header>
+
+    <div class="income-savings-card" style="max-width: 600px; margin: 0 auto;">
+        {% if error %}
+            <div class="modal-form-error" style="display:block; margin-bottom: 1.5rem;">{{ error }}</div>
+        {% endif %}
+
+        <form method="post" action="{{ url_for('add_savings') }}" class="add-expense-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+            <div class="form-group">
+                <label for="goal_name" class="form-field-label">Goal Name</label>
+                <input type="text" name="goal_name" id="goal_name" required
+                       class="form-input form-field-input" placeholder="e.g. New Laptop, Emergency Fund">
+            </div>
+
+            <div class="form-group">
+                <label for="target_amount" class="form-field-label">Target Amount <span class="add-expense-prefix">₹</span></label>
+                <input type="number" name="target_amount" id="target_amount" step="0.01" min="0.01" max="1000000" required
+                       class="form-input form-field-input" placeholder="0.00">
+            </div>
+
+            <div class="form-group">
+                <label for="deadline" class="form-field-label">Deadline (Optional)</label>
+                <input type="date" name="deadline" id="deadline"
+                       class="form-input form-field-input">
+            </div>
+
+            <div class="add-expense-form-actions">
+                <button type="submit" class="btn-submit">Create Goal</button>
+                <a href="{{ url_for('list_savings') }}" class="btn-ghost">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

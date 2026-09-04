@@ -20,6 +20,10 @@
             </a>
             <div class="nav-links">
                 {% if session.user_id %}
+                    <a href="{{ url_for('list_income') }}"
+                       class="nav-link{% if request.endpoint == 'list_income' %} nav-link--active{% endif %}">Income</a>
+                    <a href="{{ url_for('list_savings') }}"
+                       class="nav-link{% if request.endpoint == 'list_savings' %} nav-link--active{% endif %}">Savings</a>
                     <a href="{{ url_for('analytics') }}"
                        class="nav-link{% if request.endpoint == 'analytics' %} nav-link--active{% endif %}">Analytics</a>
                     <a href="{{ url_for('budget') }}"

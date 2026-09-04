@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}{{ 'Add' if not income else 'Edit' }} Income — Spendly{% endblock %}
+
+{% block head %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/income_savings.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="income-savings-container">
+    <header class="income-savings-header">
+        <div>
+            <h1 class="profile-name">{{ 'Add Income' if not income else 'Edit Income' }}</h1>
+            <p class="profile-email">Record your earnings and income sources</p>
+        </div>
+        <a href="{{ url_for('list_income') }}" class="btn-ghost">Back to list</a>
+    </header>
+
+    <div class="income-savings-card" style="max-width: 600px; margin: 0 auto;">
+        {% if error %}
+            <div class="modal-form-error" style="display:block; margin-bottom: 1.5rem;">{{ error }}</div>
+        {% endif %}
+
+        <form method="post" action="{% if income %}{{ url_for('edit_income', id=income.id) }}{% else %}{{ url_for('add_income') }}{% endif %}" class="add-expense-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+            <div class="form-group">
+                <label for="amount" class="form-field-label">Amount <span class="add-expense-prefix">₹</span></label>
+                <input type="number" name="amount" id="amount" step="0.01" min="0.01" max="1000000" required
+                       class="form-input form-field-input" placeholder="0.00"
+                       value="{{ amount if amount else (income.amount if income else '') }}">
+            </div>
+
+            <div class="form-group">
+                <label for="source" class="form-field-label">Source</label>
+                <input type="text" name="source" id="source" required
+                       class="form-input form-field-input" placeholder="e.g. Monthly Salary, Freelancing"
+                       value="{{ source if source else (income.source if income else '') }}">
+            </div>
+
+            <div class="form-group">
+                <label for="category" class="form-field-label">Category</label>
+                <select name="category" id="category" class="form-input form-field-select">
+                    <option value="">Select a category (Optional)</option>
+                    {% for c in CATEGORIES %}
+                        <option value="{{ c }}"{% if (category and category == c) or (not category and income and income.category == c) %} selected{% endif %}>{{ c }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="date" class="form-field-label">Date</label>
+                <input type="date" name="date" id="date" required
+                       class="form-input form-field-input"
+                       value="{{ date if date else (income.date if income else today) }}">
+            </div>
+
+            <div class="add-expense-form-actions">
+                <button type="submit" class="btn-submit">Save Income</button>
+                <a href="{{ url_for('list_income') }}" class="btn-ghost">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

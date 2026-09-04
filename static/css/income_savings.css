@@ -1,0 +1,100 @@
+/* Income & Savings Styles */
+
+.income-savings-container {
+    max-width: 1000px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+}
+
+.income-savings-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2rem;
+}
+
+/* reuse profile-card and profile-table patterns */
+.income-savings-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 1.5rem;
+    box-shadow: var(--shadow-sm);
+}
+
+/* Savings Progress Bar */
+.savings-goal-row {
+    margin-bottom: 1.5rem;
+}
+
+.savings-goal-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.savings-goal-name {
+    font-weight: 600;
+    font-size: 1.1rem;
+}
+
+.savings-goal-amount {
+    font-family: var(--font-mono);
+    font-weight: 600;
+}
+
+.savings-progress-track {
+    height: 12px;
+    background: var(--bg-input);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+}
+
+.savings-progress-fill {
+    height: 100%;
+    background: var(--primary-color);
+    transition: width 0.3s ease;
+}
+
+.savings-progress-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+}
+
+/* Analytics KPI Summary */
+.financial-summary-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.summary-tile {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 1.25rem;
+    text-align: center;
+}
+
+.summary-tile-label {
+    display: block;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+}
+
+.summary-tile-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-main);
+}
+
+.summary-tile-value--income { color: var(--primary-color); }
+.summary-tile-value--expense { color: var(--danger-color); }
+.summary-tile-value--savings { color: var(--success-color); }
