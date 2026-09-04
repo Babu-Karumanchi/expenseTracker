@@ -81,7 +81,8 @@
         var href = link.getAttribute("href");
         if (!href || href.startsWith("http") || href.startsWith("#") || link.getAttribute("target") === "_blank") return;
 
-        if (href.startsWith("/")) {
+        // Intercept internal links (starting with /), but NOT logout
+        if (href.startsWith("/") && href !== "/logout") {
             event.preventDefault();
             history.pushState({}, "", href);
             navigateTo(href, false, false);
