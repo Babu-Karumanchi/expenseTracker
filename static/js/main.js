@@ -14,7 +14,86 @@
 // table in place on success (or shows an inline error on failure).
 
 (function () {
+    // ---------------------------------------------------------------- //
+    // SPA Router                                                         //
+    // ---------------------------------------------------------------- //
+
+    function navigateTo(urlOrHtml, isHtml = false, pushState = true) {
+        if (!isHtml) {
+            fetch(urlOrHtml).then(function (resp) {
+                if (!resp.ok) throw new Error("HTTP " + resp.status);
+                return resp.text();
+            }).then(function (html) {
+                navigateTo(html, true, pushState);
+            }).catch(function (err) {
+                console.error("Navigation failed:", err);
+            });
+            return;
+        }
+
+        var html = urlOrHtml;
+        var parser = new DOMParser();
+        var doc = parser.parseFromString(html, "text/html");
+
+        // 2. Update main content
+        var newContent = doc.querySelector(".main-content");
+        var currentContent = document.querySelector(".main-content");
+        if (newContent && currentContent) {
+            currentContent.innerHTML = newContent.innerHTML;
+        }
+
+        // 3. Update page title
+        document.title = doc.title;
+
+        // 4. Update head (links and styles)
+        var headLinks = doc.querySelectorAll("head link[rel='stylesheet'], head style");
+        headLinks.forEach(function (el) {
+            var exists = false;
+            if (el.tagName === "LINK") {
+                var href = el.getAttribute("href");
+                if (document.querySelector("link[href='" + href + "']")) exists = true;
+            }
+            if (!exists) {
+                document.head.appendChild(el.cloneNode(true));
+            }
+        });
+
+        // 5. Update navbar active states
+        var activeLink = doc.querySelector(".nav-link--active");
+        if (activeLink) {
+            var href = activeLink.getAttribute("href");
+            document.querySelectorAll(".nav-link").forEach(function (link) {
+                link.classList.remove("nav-link--active");
+                if (link.getAttribute("href") === href) {
+                    link.classList.add("nav-link--active");
+                }
+            });
+        }
+
+        // 6. History and UI
+        // pushState is handled by the caller for URL changes
+        window.scrollTo(0, 0);
+    }
+
+    document.addEventListener("click", function (event) {
+        var link = event.target.closest("a");
+        if (!link) return;
+        var href = link.getAttribute("href");
+        if (!href || href.startsWith("http") || href.startsWith("#") || link.getAttribute("target") === "_blank") return;
+
+        if (href.startsWith("/")) {
+            event.preventDefault();
+            history.pushState({}, "", href);
+            navigateTo(href, false, false);
+        }
+    });
+
+    window.addEventListener("popstate", function () {
+        navigateTo(window.location.pathname, false, false);
+    });
+
     function openModal(modal) {
+
         var iframe = modal.querySelector("iframe[data-src]");
         if (iframe && !iframe.src) {
             iframe.src = iframe.getAttribute("data-src");
@@ -144,74 +223,98 @@
     document.addEventListener("submit", function (event) {
         var form = event.target;
         if (!(form instanceof HTMLFormElement)) return;
-        if (!form.hasAttribute("data-ajax-form")) return;
-        var modal = form.closest(".modal");
-        // Only intercept inside an open modal — stray submits elsewhere
-        // should fall through to native behaviour.
-        if (!modal || modal.hidden) return;
 
-        event.preventDefault();
-        clearModalError(modal);
+        var action = form.action;
+        if (!action || action.startsWith("http") || !action.includes(window.location.origin)) return;
 
-        var submitBtn = form.querySelector("[type=submit]");
-        if (submitBtn) submitBtn.disabled = true;
+        if (form.hasAttribute("data-ajax-form")) {
+            var modal = form.closest(".modal");
+            // Only intercept inside an open modal — stray submits elsewhere
+            // should fall through to native behaviour.
+            if (!modal || modal.hidden) return;
 
-        var fd = new FormData(form);
-        fetch(form.action, {
-            method: form.method || "POST",
-            body: fd,
-            headers: { "X-Requested-With": "XMLHttpRequest" }
-        }).then(function (resp) {
-            if (!resp.ok) {
-                throw new Error("HTTP " + resp.status);
-            }
-            return resp.json();
-        }).then(function (data) {
-            if (!data || !data.ok) {
-                showModalError(modal, (data && data.error) || "Please correct the error and try again.");
-                // Echo typed values back into the form so the user
-                // doesn't lose their typing on validation failure.
-                if (data && data.values) {
-                    Object.keys(data.values).forEach(function (k) {
-                        var el = form.elements[k];
-                        if (el) el.value = data.values[k];
-                    });
+            event.preventDefault();
+            clearModalError(modal);
+
+            var submitBtn = form.querySelector("[type=submit]");
+            if (submitBtn) submitBtn.disabled = true;
+
+            var fd = new FormData(form);
+            fetch(action, {
+                method: form.method || "POST",
+                body: fd,
+                headers: { "X-Requested-With": "XMLHttpRequest" }
+            }).then(function (resp) {
+                if (!resp.ok) {
+                    throw new Error("HTTP " + resp.status);
                 }
-                return;
-            }
-
-            // Refresh the page-level stat tiles from the envelope (the
-            // server is the single source of truth — we don't compute
-            // deltas client-side). Runs for Add / Edit / Delete.
-            renderStats(data);
-
-            var tbody = document.querySelector(".profile-table tbody");
-
-            if (form.action.indexOf("/delete") !== -1) {
-                // Delete: remove the row + its now-orphaned modals.
-                var row = document.querySelector('tr[data-expense-id="' + data.id + '"]');
-                if (row) row.remove();
-                var dm = document.getElementById("delete-modal-" + data.id);
-                if (dm) dm.remove();
-                var em = document.getElementById("edit-modal-" + data.id);
-                if (em) em.remove();
-            } else if (form.action.indexOf("/edit") !== -1) {
-                // Edit: update the existing row's cells in place.
-                var row = document.querySelector('tr[data-expense-id="' + data.expense.id + '"]');
-                if (row) updateExpenseRow(row, data.expense);
-            } else if (form.action.indexOf("/add") !== -1) {
-                // Add: prepend a new row + reset the form for the next entry.
-                if (tbody && data.expense) {
-                    tbody.insertBefore(renderExpenseRow(data.expense), tbody.firstChild);
+                return resp.json();
+            }).then(function (data) {
+                if (!data || !data.ok) {
+                    showModalError(modal, (data && data.error) || "Please correct the error and try again.");
+                    // Echo typed values back into the form so the user
+                    // doesn't lose their typing on validation failure.
+                    if (data && data.values) {
+                        Object.keys(data.values).forEach(function (k) {
+                            var el = form.elements[k];
+                            if (el) el.value = data.values[k];
+                        });
+                    }
+                    return;
                 }
-                resetForm(form);
-            }
 
-            closeModal(modal);
-        }).catch(function () {
-            showModalError(modal, "Could not save — please try again.");
-        }).then(function () {
-            if (submitBtn) submitBtn.disabled = false;
-        });
+                // Refresh the page-level stat tiles from the envelope (the
+                // server is the single source of truth — we don't compute
+                // deltas client-side). Runs for Add / Edit / Delete.
+                renderStats(data);
+
+                var tbody = document.querySelector(".profile-table tbody");
+
+                if (form.action.indexOf("/delete") !== -1) {
+                    // Delete: remove the row + its now-orphaned modals.
+                    var row = document.querySelector('tr[data-expense-id="' + data.id + '"]');
+                    if (row) row.remove();
+                    var dm = document.getElementById("delete-modal-" + data.id);
+                    if (dm) dm.remove();
+                    var em = document.getElementById("edit-modal-" + data.id);
+                    if (em) em.remove();
+                } else if (form.action.indexOf("/edit") !== -1) {
+                    // Edit: update the existing row's cells in place.
+                    var row = document.querySelector('tr[data-expense-id="' + data.expense.id + '"]');
+                    if (row) updateExpenseRow(row, data.expense);
+                } else if (form.action.indexOf("/add") !== -1) {
+                    // Add: prepend a new row + reset the form for the next entry.
+                    if (tbody && data.expense) {
+                        tbody.insertBefore(renderExpenseRow(data.expense), tbody.firstChild);
+                    }
+                    resetForm(form);
+                }
+
+                closeModal(modal);
+            }).catch(function () {
+                showModalError(modal, "Could not save — please try again.");
+            }).then(function () {
+                if (submitBtn) submitBtn.disabled = false;
+            });
+        } else {
+            // SPA-style standard form submission
+            event.preventDefault();
+            var fd = new FormData(form);
+            fetch(action, {
+                method: form.method || "POST",
+                body: fd
+            }).then(function (resp) {
+                // Handle redirect by updating URL
+                var finalUrl = resp.url;
+                if (finalUrl !== window.location.href) {
+                    history.pushState({}, "", finalUrl);
+                }
+                return resp.text();
+            }).then(function (html) {
+                navigateTo(html, true, false);
+            }).catch(function (err) {
+                console.error("Form submission failed:", err);
+            });
+        }
     });
 })();
