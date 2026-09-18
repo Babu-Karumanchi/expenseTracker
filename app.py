@@ -4,6 +4,9 @@ import os
 import re
 import secrets
 import sqlite3
+import urllib.request
+import urllib.error
+import json
 from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -41,6 +44,28 @@ from database.db import (
     delete_savings_goal as delete_savings_goal_row,
     get_user_financial_summary,
 )
+
+def _load_env():
+    """Manually load variables from a .env file into os.environ.
+    This avoids adding external dependencies like python-dotenv.
+    """
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" in line:
+                        key, value = line.split("=", 1)
+                        # Remove quotes if present
+                        os.environ[key.strip()] = value.strip().strip("'").strip('"')
+        except Exception as e:
+            print(f"Warning: Could not load .env file: {e}")
+
+# Initialize environment variables from .env file
+_load_env()
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SPENDLY_SECRET_KEY") or "dev-only-not-for-production"
@@ -1132,6 +1157,124 @@ def analytics():
         today_month_label=today.strftime("%B %Y"),
         CATEGORIES=CATEGORIES,
     )
+
+
+@app.route("/insights")
+def insights():
+    """Render AI-driven spending insights based on the last 3 months of data.
+
+    Auth guard: signed-out users redirect to /login.
+
+    The route fetches expenses from the last 3 months, formats them for an LLM,
+    and calls an AI API using urllib.request. If the API key is missing or
+    the request fails, a graceful fallback message is displayed.
+    """
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    user_id = session["user_id"]
+    today = _today()
+    start_date = _add_months(today, -3).isoformat()
+    today_iso = today.isoformat()
+
+    expenses = get_user_expenses(user_id, date_from=start_date, date_to=today_iso)
+
+    if not expenses:
+        return render_template(
+            "insights.html",
+            insights="No expenses found for the last 3 months. Add some transactions to get AI insights!"
+        )
+
+    # Format expenses for the AI prompt
+    expense_summary = []
+    for row in expenses:
+        expense_summary.append(
+            f"Date: {row['date']} | Category: {row['category']} | Amount: ₹{row['amount']:.2f} | Desc: {row['description'] or ''}"
+        )
+    expense_text = "\\n".join(expense_summary)
+
+    # AI API Integration (Groq API)
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
+
+    # Supported Groq models for experimentation
+    ALLOWED_MODELS = [
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-safeguard-20b",
+        "qwen/qwen3.8-27b"
+    ]
+
+    ai_model = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b").strip()
+    if ai_model not in ALLOWED_MODELS:
+        ai_model = "openai/gpt-oss-20b"
+
+    if not api_key:
+        return render_template(
+            "insights.html",
+            insights="Your AI insights are currently unavailable. Please ensure the Groq API key (GROQ_API_KEY) is configured in your .env file."
+        )
+
+    system_prompt = (
+        "You are a friendly and professional financial assistant for Spendly, "
+        "a personal expense tracker used by people in India. Analyze the user's "
+        "spending patterns for the last 3 months. Use Indian English, reference "
+        "currency as ₹ or INR. Be concise. Identify clear spending patterns and "
+        "provide exactly 3 actionable, specific tips to save money based on the provided data. "
+        "IMPORTANT: Provide the output in plain text only. Do not use Markdown formatting "
+        "(no bolding, no italics, no asterisks for lists). Use simple line breaks for spacing."
+    )
+    user_prompt = f"Here are the expenses for the last 3 months:\\n\\n{expense_text}"
+
+    try:
+        # Groq uses an OpenAI-compatible API
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        payload = {
+            "model": ai_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.7
+        }
+
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+        )
+
+        with urllib.request.urlopen(req, timeout=20) as response:
+            res_data = json.loads(response.read().decode("utf-8"))
+            # Extract text from Groq's OpenAI-compatible response structure
+            insights_text = res_data["choices"][0]["message"]["content"]
+
+    except urllib.error.HTTPError as e:
+        # Read the actual error body from the API to diagnose the 403
+        try:
+            body = e.read().decode("utf-8")
+            if body:
+                try:
+                    error_json = json.loads(body)
+                    error_msg = error_json.get("error", {}).get("message", body)
+                except json.JSONDecodeError:
+                    error_msg = body
+            else:
+                error_msg = "No error details provided by server."
+        except Exception as body_err:
+            error_msg = f"Could not read error body: {str(body_err)}"
+
+        print(f"DEBUG: AI API HTTP Error: {e.code} - {error_msg}")
+        insights_text = f"Your AI insights are currently unavailable. Error {e.code}: {error_msg}"
+
+    except Exception as e:
+        print(f"DEBUG: AI API General Error: {e}") # Debug line
+        insights_text = f"Your AI insights are currently unavailable. Error: {str(e)}"
+
+    return render_template("insights.html", insights=insights_text)
 
 
 

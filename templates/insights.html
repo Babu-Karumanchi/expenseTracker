@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}AI Insights — Spendly{% endblock %}
+
+{% block head %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/analytics.css') }}">
+{% endblock %}
+
+{% block content %}
+<section class="analytics-dashboard">
+
+    <header class="analytics-header">
+        <span class="analytics-badge">AI Insights</span>
+        <h1 class="analytics-title">Financial Health Check</h1>
+        <p class="analytics-subtitle">
+            A personalized analysis of your spending over the last 3 months.
+        </p>
+    </header>
+
+    <section class="profile-card">
+        <h2 class="profile-card-title">Your AI Analysis</h2>
+        <div class="insights-content" style="white-space: pre-wrap; font-family: monospace; color: var(--ink-soft); line-height: 1.7;">
+            {{ insights }}
+        </div>
+    </section>
+
+</section>
+{% endblock %}
